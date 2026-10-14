@@ -105,7 +105,8 @@ abstract class Module(protected val s: UmbraSession, val title: String) {
  */
 class UmbraSession(
     val target: UmbraTarget,
-    private val identity: ClientIdentity
+    private val identity: ClientIdentity,
+    softdeskStore: SoftdeskStore
 ) {
     val channel: ManagedChannel = OkHttpChannelBuilder
         .forAddress(target.host, target.port)
@@ -123,6 +124,7 @@ class UmbraSession(
     val headers: Metadata
         get() = Metadata().also { m -> sessionId?.let { m.put(SESSION_KEY, it) } }
     val runtimeId get() = identity.runtimeId
+    val clientName get() = identity.clientName
     private val requestCounter = AtomicLong()
 
     private val clientStub = ClientServiceCoroutineStub(channel)
@@ -161,10 +163,11 @@ class UmbraSession(
     val project = ProjectModule(this)
     val dmx = DmxModule(this)
     val system = SystemModule(this)
+    val softdesk = SoftdeskModule(this, softdeskStore)
 
     val modules: List<Module> = listOf(
         executors, masters, macros, mainSwitches, globals, cuelists, beat, audio,
-        timecodes, commandLine, notifications, devices, presets, project, dmx, system
+        timecodes, commandLine, notifications, devices, presets, project, dmx, system, softdesk
     )
 
     fun nextRequestId() = requestCounter.incrementAndGet().toString()

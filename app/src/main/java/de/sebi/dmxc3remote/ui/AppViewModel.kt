@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import de.sebi.dmxc3remote.net.ClientIdentity
 import de.sebi.dmxc3remote.net.DiscoveredUmbra
 import de.sebi.dmxc3remote.net.Prefs
+import de.sebi.dmxc3remote.net.SoftdeskStore
 import de.sebi.dmxc3remote.net.UmbraSession
 import de.sebi.dmxc3remote.net.UmbraTarget
 import de.sebi.dmxc3remote.net.describe
@@ -31,6 +32,7 @@ sealed interface ConnState {
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     val prefs = Prefs(app)
+    val softdesks = SoftdeskStore(app)
 
     private val _conn = MutableStateFlow<ConnState>(ConnState.Idle)
     val conn: StateFlow<ConnState> = _conn.asStateFlow()
@@ -90,7 +92,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             while (isActive) {
                 attempt++
                 _conn.value = ConnState.Connecting(target, attempt)
-                val s = UmbraSession(target, identity())
+                val s = UmbraSession(target, identity(), softdesks)
                 var failure: String
                 try {
                     s.run {

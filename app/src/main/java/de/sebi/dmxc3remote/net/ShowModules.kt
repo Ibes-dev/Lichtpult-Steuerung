@@ -4,7 +4,6 @@ import LumosProtobuf.Audio.AudioServiceTypes.ControlPlayerThreadRequest
 import LumosProtobuf.Audio.AudioServiceTypes.PlayerThreadDescriptor
 import LumosProtobuf.BeatServiceTypes.ManualBeatFactorRequestResponse
 import LumosProtobuf.BeatServiceTypes.ManualBeatIntervalRequestResponse
-import LumosProtobuf.BeatServiceTypes.ManualBeatLearnRequest
 import LumosProtobuf.BeatServiceTypes.ManualBeatSyncRequest
 import LumosProtobuf.CommonTypes.EChangeType
 import LumosProtobuf.CommonTypes.ENullableBool
@@ -386,49 +385,53 @@ class BeatModule(s: UmbraSession) : Module(s, "Beat") {
         }
     }
 
-    /** Tap. UNVERIFIZIERT: Zeitbasis = Unix-ms. */
-    fun tap() = act("Beat lernen") {
-        stub.dl(3).learnManualBeat(
-            ManualBeatLearnRequest.newBuilder()
-                .setRequestId(s.nextRequestId())
-                .setRuntimeId(s.runtimeId)
-                .setTime(System.currentTimeMillis())
-                .build(),
-            s.headers
-        ).requireOk("LearnManualBeat")
+    /**
+     * Tap-Tempo lokal berechnet (Mittel der letzten Intervalle, Reset nach 2 s Pause)
+     * und per SetManualBeat gesetzt. LearnManualBeat lief beim Test in eine Zeitüberschreitung
+     * (Server antwortet nicht, Zeitbasis des time-Felds undokumentiert) und wird nicht mehr genutzt.
+     */
+    private val taps = ArrayDeque<Long>()
+
+    fun tap() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (taps.isNotEmpty() && now - taps.last() > 2_000) taps.clear()
+        taps.addLast(now)
+        while (taps.size > 5) taps.removeFirst()
+        if (taps.size < 2) return
+        val interval = ((taps.last() - taps.first()) / (taps.size - 1)).toInt()
+        if (interval !in 150..6_000) return
+        _intervalMs.value = interval
+        s.throttler.submit("beat:tap") { sendInterval(interval, true) }
     }
 
+    /** UNVERIFIZIERT: Sync setzt den Phasenbeginn auf "jetzt"; Zeitbasis Unix-ms angenommen, Deadline 10 s. */
     fun sync() = act("Beat sync") {
-        stub.dl(3).syncManualBeat(
+        stub.dl(10).syncManualBeat(
             ManualBeatSyncRequest.newBuilder().setRequestId(s.nextRequestId()).setTime(System.currentTimeMillis()).build(),
             s.headers
         ).requireOk("SyncManualBeat")
     }
 
-    fun setBpm(bpm: Double) = act("BPM setzen") {
-        val interval = (60_000.0 / bpm.coerceIn(10.0, 400.0)).toInt()
-        stub.dl(3).setManualBeat(
+    private suspend fun sendInterval(interval: Int, enabled: Boolean) {
+        stub.dl(5).setManualBeat(
             ManualBeatIntervalRequestResponse.newBuilder()
                 .setRequestId(s.nextRequestId())
                 .setInterval(interval)
-                .setEnabled(true)
+                .setEnabled(enabled)
                 .setEnabledSet(true)
                 .build(),
             s.headers
         ).requireOk("SetManualBeat")
+    }
+
+    fun setBpm(bpm: Double) = act("BPM setzen") {
+        val interval = (60_000.0 / bpm.coerceIn(10.0, 400.0)).toInt()
+        sendInterval(interval, true)
         _intervalMs.value = interval
     }
 
     fun setEnabled(on: Boolean) = act("Beat an/aus") {
-        stub.dl(3).setManualBeat(
-            ManualBeatIntervalRequestResponse.newBuilder()
-                .setRequestId(s.nextRequestId())
-                .setInterval(_intervalMs.value)
-                .setEnabled(on)
-                .setEnabledSet(true)
-                .build(),
-            s.headers
-        ).requireOk("SetManualBeat")
+        sendInterval(_intervalMs.value, on)
         _enabled.value = on
     }
 

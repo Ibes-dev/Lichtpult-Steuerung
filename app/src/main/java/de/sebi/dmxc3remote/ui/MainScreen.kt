@@ -38,7 +38,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import de.sebi.dmxc3remote.net.UmbraSession
 import de.sebi.dmxc3remote.net.UmbraTarget
 
-private val TABS = listOf("Executoren", "Cuelists", "Master", "Macros", "Programmer", "Medien", "Konsole", "System")
+private val TABS = listOf("Executoren", "Softdesk", "Cuelists", "Master", "Macros", "Programmer", "Medien", "Konsole", "System")
 
 @Composable
 fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, modifier: Modifier = Modifier) {
@@ -63,12 +63,13 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
             Box(Modifier.fillMaxSize()) {
                 when (tab) {
                     0 -> ExecutorScreen(session)
-                    1 -> CuelistScreen(session)
-                    2 -> MasterScreen(session)
-                    3 -> MacroScreen(session)
-                    4 -> ProgrammerScreen(session)
-                    5 -> MediaScreen(session)
-                    6 -> ConsoleScreen(session)
+                    1 -> SoftdeskScreen(session, vm.softdesks)
+                    2 -> CuelistScreen(session)
+                    3 -> MasterScreen(session)
+                    4 -> MacroScreen(session)
+                    5 -> ProgrammerScreen(session)
+                    6 -> MediaScreen(session)
+                    7 -> ConsoleScreen(session)
                     else -> SystemScreen(session)
                 }
             }
