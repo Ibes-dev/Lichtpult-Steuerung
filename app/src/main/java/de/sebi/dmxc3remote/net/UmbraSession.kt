@@ -139,7 +139,7 @@ class UmbraSession(
      * Baut die Sitzung auf und blockiert, solange sie lebt.
      * Wirft eine Exception, sobald ein Pflicht-Stream abbricht.
      */
-    suspend fun run(onReady: () -> Unit) = coroutineScope {
+    suspend fun run(onReady: () -> Unit): Unit = coroutineScope {
         login()
         reportReadyToWork()
         bindUser()
@@ -220,7 +220,7 @@ class UmbraSession(
     }
 
     /** Ping-Pong wie in UmbraConnectionClient.OpenPing: eigener Ping alle 5 s, fremde Pings beantworten. */
-    private suspend fun pingLoop() = coroutineScope {
+    private suspend fun pingLoop(): Nothing = coroutineScope {
         val outgoing = Channel<PingPong>(Channel.UNLIMITED)
         val sender = launch {
             var counter = 0L
@@ -350,7 +350,7 @@ class UmbraSession(
     }
 
     /** Best-effort Logoff + Kanal schließen. */
-    suspend fun close() = withContext(NonCancellable) {
+    suspend fun close(): Unit = withContext(NonCancellable) {
         if (sessionId != null) {
             withTimeoutOrNull(1_500) {
                 try {
