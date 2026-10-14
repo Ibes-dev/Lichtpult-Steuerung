@@ -57,7 +57,7 @@ fun Throwable.describe(): String = when (this) {
         Status.Code.UNIMPLEMENTED -> "Vom Server nicht unterstützt"
         else -> "${status.code}: ${status.description ?: ""}"
     }
-    else -> message ?: javaClass.simpleName
+    else -> "${javaClass.simpleName}: ${message ?: ""}".trimEnd(' ', ':')
 }
 
 /**
@@ -80,7 +80,9 @@ class Throttler {
                     action()
                 } catch (e: CancellationException) {
                     throw e
-                } catch (e: Exception) {
+                } catch (e: VirtualMachineError) {
+                    throw e
+                } catch (e: Throwable) {
                     onError(e)
                 }
             }

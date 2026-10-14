@@ -101,7 +101,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     failure = "Verbindung beendet"
                 } catch (e: CancellationException) {
                     throw e
-                } catch (e: Exception) {
+                } catch (e: VirtualMachineError) {
+                    throw e
+                } catch (e: Throwable) {
                     failure = e.describe()
                 } finally {
                     _session.value = null

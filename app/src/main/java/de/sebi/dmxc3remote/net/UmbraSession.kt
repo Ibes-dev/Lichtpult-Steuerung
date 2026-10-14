@@ -83,7 +83,9 @@ abstract class Module(protected val s: UmbraSession, val title: String) {
                 throw UmbraException("Stream beendet")
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (e: VirtualMachineError) {
+                throw e
+            } catch (e: Throwable) {
                 _error.value = e.describe()
                 if (e is StatusException && e.status.code == Status.Code.UNIMPLEMENTED) return
                 delay(minOf(30_000L, 2_000L shl minOf(attempt++, 4)))
@@ -113,7 +115,13 @@ class UmbraSession(
         .keepAliveWithoutCalls(true)
         .build()
 
-    val headers = Metadata()
+    /**
+     * Pro Aufruf frische Metadata mit SessionID. grpc-java verändert die übergebene
+     * Metadata beim Call-Start (Timeout-, Encoding-Header) und Metadata ist nicht
+     * thread-sicher -> eine gemeinsam genutzte Instanz ist bei vielen parallelen Calls riskant.
+     */
+    val headers: Metadata
+        get() = Metadata().also { m -> sessionId?.let { m.put(SESSION_KEY, it) } }
     val runtimeId get() = identity.runtimeId
     private val requestCounter = AtomicLong()
 
@@ -121,6 +129,7 @@ class UmbraSession(
     private val connectedStub = ConnectedClientServiceCoroutineStub(channel)
     val userStub = UserClientCoroutineStub(channel)
 
+    @Volatile
     private var sessionId: String? = null
     var userContextId: String = ""
         private set
@@ -183,7 +192,9 @@ class UmbraSession(
                 block()
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (e: VirtualMachineError) {
+                throw e
+            } catch (e: Throwable) {
                 emit("$what: ${e.describe()}", isError = true)
             }
         }
@@ -214,7 +225,6 @@ class UmbraSession(
         }
         if (resp.sessionId.isBlank()) throw UmbraException("Login ohne SessionID")
         sessionId = resp.sessionId
-        headers.put(SESSION_KEY, resp.sessionId)
     }
 
     private suspend fun reportReadyToWork() {
