@@ -3,28 +3,36 @@
 Android-Client für DMXControl 3.3.x über das offizielle gRPC-Netzwerkinterface (Umbra-Broker).
 Kotlin, Jetpack Compose, grpc-java (okhttp, lite) + grpc-kotlin.
 
-## Funktionsumfang 0.1.0
-- Discovery: UmbraUdpBroadcast auf Multicast 225.68.67.3, UDP 17474
-- Manuelle Verbindung: IP, Port (Standard 17475), NetID
-- Session: Login → ReportReadyToWork → Ping-Stream → UserClient.Bind
-- Executoren: Live-Liste, Seiten-Tabs, Fader (relativ, gedrosselt 25 ms), Tasten 1–4 (Press/Release)
-- Grand Master: Anzeige, BLACK / FULL
-- Auto-Reconnect mit Backoff, Display bleibt an
+## Funktionsumfang 0.2.0
+- Verbindung: Discovery (Multicast 225.68.67.3:17474), manuell, Freigabe-Anfrage (InformClientExists), Auto-Reconnect
+- Top-Bar: Blackout, Freeze, Projekt speichern (Dirty-Anzeige), Beat-LED
+- Executoren: Fader, Tasten 1–4, Seiten (lokal oder mit DMXC-UserContext synchronisiert)
+- Cuelists: GO / Back / Pause / Stop, Intensität, aktueller/nächster Cue, Gruppenfilter, Alle STOP
+- Master: alle Master; Intensität per Fader, FULL/BLACK; Speed-Master LEARN/SYNC/×2/÷2
+- Macros: Tasten (Press/Release), Fader
+- Programmer: Gerätegruppen wählen, Dimmer/Double-Werte (Bereich aus Property-Typ), RGB + Farbpalette, Pan/Tilt-XY-Pad, Bool-Schalter, Clear; Presets (gezielt auf Gruppe oder global)
+- Medien: Manual Beat (Tap, Sync, Faktor, BPM), Timecode (Play/Pause/Stop, Laufzeit), Audio-Player (Play/Pause/Stop, Lautstärke)
+- Konsole: Kommandozeile mit Verlauf, Benutzer-Meldungen
+- System: Projektstatus, Hauptschalter, DMX-Monitor (512 Kanäle je Universum), DMX-Interfaces an/aus, Plugins an/aus, RDM-Liste + Discovery, Stromkreise mit Last, Modulstatus
+- Jedes Modul läuft unabhängig: Fehler eines Bereichs trennen die Sitzung nicht
 
 ## Build
 1. Protos laden (Version = installierte DMXControl-Version):
    - Windows: `powershell -ExecutionPolicy Bypass -File setup-protos.ps1 -Version v3.3.2`
    - Linux:   `./setup-protos.sh v3.3.2`
-2. Android Studio (JDK 17) öffnen oder `./gradlew assembleDebug`
-3. APK: `app/build/outputs/apk/debug/app-debug.apk`
+2. `./gradlew testDebugUnitTest assembleDebug`
 
-Die .proto-Dateien werden nicht mitgeliefert: das Repo DMXControl/DMXControl3-Network-Interface enthält keine Lizenzdatei.
+## CI (GitHub Actions)
+- Jeder Push: Unit-Tests + Debug-APK, versionCode = Run-Nummer
+- Signierte Release-APK, wenn diese Repository-Secrets gesetzt sind:
+  `KEYSTORE_BASE64` (base64 der .jks), `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`
+  Keystore erzeugen: `keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 4096 -validity 10000 -alias dmxc3remote`
+  Base64 (PowerShell): `[Convert]::ToBase64String([IO.File]::ReadAllBytes("release.jks")) | Set-Clipboard`
+
+## Nicht enthalten (bewusst, Bearbeitung gehört in die DMXC3-GUI)
+StageView, Settings, Parameter, Inputs/MacroBoards, ItemLists, Affinity, Attachables/Effekte, FannedValues,
+Projekt laden/importieren, Geräte/Cues anlegen oder löschen.
 
 ## Windows-Host
-- Eingehend TCP 17475 (Umbra, HTTP/2 ohne TLS) in der Windows-Firewall freigeben
-- Gerät und PC im selben L2-Segment, sonst kommt der Multicast nicht an → manuell verbinden
-- WLAN-AP: Multicast/IGMP-Snooping darf 225.68.67.3 nicht blocken (Client-Isolation aus)
-
-## Protokoll-Referenzen
-- `csharp/src/UmbraConnectionClient.cs`, `NetConstants.cs`, `UmbraDiscoveryClient.cs` im Network-Interface-Repo
-- `src/grpc/grpcclient.ts`, `src/utils.ts` in DMXControl/companion-module-dmxcontrolprojects-dmxcontrol3
+- Eingehend TCP 17475 (Umbra, HTTP/2 ohne TLS) freigeben
+- Gerät und PC im selben L2-Segment, sonst manuell verbinden

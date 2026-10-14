@@ -1,14 +1,7 @@
 package de.sebi.dmxc3remote.net
 
-import LumosProtobuf.CommonTypes.EChangeType
-import LumosProtobuf.CommonTypes.ENullableBool
 import LumosProtobuf.CommonTypes.GetMultipleRequest
 import LumosProtobuf.CommonTypes.GetRequest
-import LumosProtobuf.Executor.ExecutorServiceCRUDTypes.SetExecutorValuesRequest
-import LumosProtobuf.Executor.ExecutorServiceTypes.ExecutorDescriptor
-import LumosProtobuf.Executor.ExecutorServiceTypes.ExecutorPageDescriptor
-import LumosProtobuf.Master.MasterServiceCRUDTypes.MasterActionRequest
-import LumosProtobuf.Master.MasterServiceTypes.MasterDescriptor
 import LumosProtobuf.UmbraServiceTypes.ClientInfo
 import LumosProtobuf.UmbraServiceTypes.ClientProgramInfo
 import LumosProtobuf.UmbraServiceTypes.EClientType
@@ -19,27 +12,30 @@ import LumosProtobuf.UmbraServiceTypes.UmbraClientReadyToWorkNotification
 import LumosProtobuf.UmbraServiceTypes.UmbraLoginRequest
 import LumosProtobuf.UmbraServiceTypes.UmbraLoginResponse
 import LumosProtobuf.UmbraServiceTypes.UmbraLogoffRequest
+import LumosProtobuf.User.UserServiceTypes.UserContextDescriptor
 import LumosProtobuf.User.UserServiceTypes.UserContextRequest
 import LumosProtobuf.User.UserServiceTypes.UserContextResponse
-import LumosProtobufClient.ExecutorClientGrpcKt.ExecutorClientCoroutineStub
-import LumosProtobufClient.MasterClientGrpcKt.MasterClientCoroutineStub
 import LumosProtobufClient.UserClientGrpcKt.UserClientCoroutineStub
 import LumosProtobufCommon.ClientServiceGrpcKt.ClientServiceCoroutineStub
 import LumosProtobufCommon.ConnectedClientServiceGrpcKt.ConnectedClientServiceCoroutineStub
 import android.os.Build
 import io.grpc.ManagedChannel
 import io.grpc.Metadata
+import io.grpc.Status
+import io.grpc.StatusException
 import io.grpc.okhttp.OkHttpChannelBuilder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -47,7 +43,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.net.Inet4Address
 import java.net.NetworkInterface
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
@@ -60,102 +55,158 @@ data class ClientIdentity(
     val password: String
 )
 
+/** Meldung für die UI (Snackbar/Konsole). */
+data class UiEvent(val text: String, val isError: Boolean, val time: Long = System.currentTimeMillis())
+
 /**
- * Eine Sitzung gegen den Umbra-Broker von DMXControl 3.
- *
- * Ablauf (verifiziert gegen UmbraConnectionClient.cs und das offizielle Companion-Modul):
- *  1. ClientService.Login (ohne Header)          -> SessionID
- *  2. Header "SessionID" für alle weiteren Calls
- *  3. ConnectedClientService.ReportReadyToWork   (Pflicht, einmalig)
- *  4. ConnectedClientService.Ping (bidi-Stream)  (Pflicht, sonst Drop nach ~5 min)
- *  5. UserClient.Bind(username, passwordHash)    -> userContextId
- *  6. Kernel-Services (Executor, Master, ...) laufen über denselben Umbra-Endpoint.
+ * Basis für alle Funktionsbereiche. load() holt den Ausgangszustand, stream() hält
+ * die Änderungs-Streams offen. Fehler eines Moduls beenden NICHT die Sitzung,
+ * das Modul wird mit Backoff neu gestartet (UNIMPLEMENTED -> dauerhaft deaktiviert).
+ */
+abstract class Module(protected val s: UmbraSession, val title: String) {
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
+    open suspend fun load() {}
+    open suspend fun stream() {
+        kotlinx.coroutines.awaitCancellation()
+    }
+
+    internal suspend fun supervise() {
+        var attempt = 0
+        while (true) {
+            try {
+                load()
+                _error.value = null
+                attempt = 0
+                stream()
+                throw UmbraException("Stream beendet")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _error.value = e.describe()
+                if (e is StatusException && e.status.code == Status.Code.UNIMPLEMENTED) return
+                delay(minOf(30_000L, 2_000L shl minOf(attempt++, 4)))
+            }
+        }
+    }
+
+    /** Aktion aus der UI: Fehler als Event melden statt die Sitzung zu beenden. */
+    protected fun act(what: String, block: suspend () -> Unit) = s.act(what, block)
+}
+
+/**
+ * Sitzung gegen den Umbra-Broker (verifiziert gegen UmbraConnectionClient.cs und
+ * das offizielle Companion-Modul):
+ *  Login -> Header "SessionID" -> ReportReadyToWork -> Ping-Stream -> UserClient.Bind.
+ *  Alle Kernel-Services laufen über denselben Umbra-Endpoint.
  */
 class UmbraSession(
     val target: UmbraTarget,
     private val identity: ClientIdentity
 ) {
-    private val channel: ManagedChannel = OkHttpChannelBuilder
+    val channel: ManagedChannel = OkHttpChannelBuilder
         .forAddress(target.host, target.port)
-        .usePlaintext() // Umbra: Kestrel, Protocols=Http2, ohne TLS -> h2c prior knowledge
+        .usePlaintext() // Kestrel Protocols=Http2 ohne TLS -> h2c prior knowledge
         .maxInboundMessageSize(UmbraConstants.MAX_MESSAGE_SIZE)
         .keepAliveTime(20, TimeUnit.SECONDS)
         .keepAliveWithoutCalls(true)
         .build()
 
-    private val headers = Metadata()
+    val headers = Metadata()
+    val runtimeId get() = identity.runtimeId
     private val requestCounter = AtomicLong()
 
     private val clientStub = ClientServiceCoroutineStub(channel)
     private val connectedStub = ConnectedClientServiceCoroutineStub(channel)
-    private val userStub = UserClientCoroutineStub(channel)
-    private val executorStub = ExecutorClientCoroutineStub(channel)
-    private val masterStub = MasterClientCoroutineStub(channel)
+    val userStub = UserClientCoroutineStub(channel)
 
     private var sessionId: String? = null
-    private var userContextId: String = ""
+    var userContextId: String = ""
+        private set
 
-    private val _executors = MutableStateFlow<Map<String, ExecutorDescriptor>>(emptyMap())
-    val executors: StateFlow<Map<String, ExecutorDescriptor>> = _executors.asStateFlow()
+    private val _userContext = MutableStateFlow<UserContextDescriptor?>(null)
+    val userContext: StateFlow<UserContextDescriptor?> = _userContext.asStateFlow()
 
-    private val _pages = MutableStateFlow<Map<String, ExecutorPageDescriptor>>(emptyMap())
-    val pages: StateFlow<Map<String, ExecutorPageDescriptor>> = _pages.asStateFlow()
+    private val _events = MutableSharedFlow<UiEvent>(extraBufferCapacity = 64)
+    val events: SharedFlow<UiEvent> = _events.asSharedFlow()
 
-    private val _masters = MutableStateFlow<Map<String, MasterDescriptor>>(emptyMap())
-    val masters: StateFlow<Map<String, MasterDescriptor>> = _masters.asStateFlow()
+    val throttler = Throttler()
 
-    private val _initialPageId = MutableStateFlow<String?>(null)
-    val initialPageId: StateFlow<String?> = _initialPageId.asStateFlow()
+    private var actScope: kotlinx.coroutines.CoroutineScope? = null
 
-    /** Letzter Faderwert je Executor, wird vom Sender-Loop gedrosselt abgearbeitet. */
-    private val pendingFader = ConcurrentHashMap<String, Double>()
+    // ------------------------------------------------------------------ Module
+    val executors = ExecutorModule(this)
+    val masters = MasterModule(this)
+    val macros = MacroModule(this)
+    val mainSwitches = MainSwitchModule(this)
+    val globals = GlobalFunctionModule(this)
+    val cuelists = CuelistModule(this)
+    val beat = BeatModule(this)
+    val audio = AudioModule(this)
+    val timecodes = TimecodeModule(this)
+    val commandLine = CommandLineModule(this)
+    val notifications = NotificationModule(this)
+    val devices = DeviceModule(this)
+    val presets = PresetModule(this)
+    val project = ProjectModule(this)
+    val dmx = DmxModule(this)
+    val system = SystemModule(this)
 
-    private fun nextRequestId() = requestCounter.incrementAndGet().toString()
+    val modules: List<Module> = listOf(
+        executors, masters, macros, mainSwitches, globals, cuelists, beat, audio,
+        timecodes, commandLine, notifications, devices, presets, project, dmx, system
+    )
 
-    private fun programInfo(): ClientProgramInfo {
-        val clientInfo = ClientInfo.newBuilder()
-            .setHostname(Build.MODEL ?: "Android")
-            .addAllIps(localIpv4())
-            .setType(EClientType.ExternalTool)
-            .setClientname(identity.clientName)
-            .setRuntimeid(identity.runtimeId)
-            .setNetworkid(target.netId)
-            .setClientCapabilities(0)
-            .build()
-        val program = ProgramInfo.newBuilder()
-            .setProgramName("DMXC3 Remote (Android)")
-            .setVendor("private")
-            .setProgramVersion("0.1.0")
-            .setBuildDate(System.currentTimeMillis())
-            .build()
-        return ClientProgramInfo.newBuilder()
-            .setProgramInfo(program)
-            .setClientInfo(clientInfo)
-            .setClientTimestampUTC(System.currentTimeMillis())
-            .build()
+    fun nextRequestId() = requestCounter.incrementAndGet().toString()
+
+    fun getMultiple(ids: List<String> = emptyList()): GetMultipleRequest = GetMultipleRequest.newBuilder()
+        .setRequestId(nextRequestId())
+        .setUserContextId(userContextId)
+        .addAllIdFilter(ids)
+        .build()
+
+    fun getRequest(): GetRequest = GetRequest.newBuilder()
+        .setRequestId(nextRequestId())
+        .setUserContextId(userContextId)
+        .build()
+
+    fun emit(text: String, isError: Boolean = false) {
+        _events.tryEmit(UiEvent(text, isError))
     }
 
-    /**
-     * Baut die Sitzung auf und blockiert, solange sie lebt.
-     * Wirft eine Exception, sobald ein Pflicht-Stream abbricht.
-     */
+    /** Startet eine UI-Aktion im Sitzungs-Scope, Fehler -> Event. */
+    fun act(what: String, block: suspend () -> Unit) {
+        val scope = actScope ?: return
+        scope.launch {
+            try {
+                block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emit("$what: ${e.describe()}", isError = true)
+            }
+        }
+    }
+
+    private fun programInfo(): ClientProgramInfo = buildProgramInfo(identity, target.netId)
+
+    /** Baut die Sitzung auf und blockiert, solange sie lebt. Nur Login/Bind/Ping sind fatal. */
     suspend fun run(onReady: () -> Unit): Unit = coroutineScope {
+        actScope = this
         login()
         reportReadyToWork()
         bindUser()
-        loadInitialState()
         onReady()
 
-        launch { pingLoop() }
-        launch { faderSender() }
-        launch { executorChanges() }
-        launch { executorPageChanges() }
-        launch { masterChanges() }
+        launch { throttler.run { e -> emit(e.describe(), isError = true) } }
+        launch { userContextChanges() }
+        modules.forEach { m -> launch { m.supervise() } }
+        pingLoop()
     }
 
     private suspend fun login() {
-        val resp = clientStub.withDeadlineAfter(3, TimeUnit.SECONDS)
-            .login(UmbraLoginRequest.newBuilder().setClient(programInfo()).build())
+        val resp = clientStub.dl(3).login(UmbraLoginRequest.newBuilder().setClient(programInfo()).build())
         when (resp.returnCode) {
             UmbraLoginResponse.EReturnCode.NoError,
             UmbraLoginResponse.EReturnCode.AlreadyLoggedIn -> Unit
@@ -167,17 +218,16 @@ class UmbraSession(
     }
 
     private suspend fun reportReadyToWork() {
-        val resp = connectedStub.withDeadlineAfter(3, TimeUnit.SECONDS).reportReadyToWork(
+        connectedStub.dl(3).reportReadyToWork(
             UmbraClientReadyToWorkNotification.newBuilder()
-                .setState(ReadyToWorkState.newBuilder().setReadyToWork(true).build())
+                .setState(ReadyToWorkState.newBuilder().setReadyToWork(true).setReceiveAndDisplayMessages(true).build())
                 .build(),
             headers
-        )
-        if (!resp.ok) throw UmbraException("ReportReadyToWork abgelehnt: ${resp.message.formatString}")
+        ).requireOk("ReportReadyToWork")
     }
 
     private suspend fun bindUser() {
-        val resp = userStub.withDeadlineAfter(3, TimeUnit.SECONDS).bind(
+        val resp = userStub.dl(3).bind(
             UserContextRequest.newBuilder()
                 .setRequestId(nextRequestId())
                 .setUsername(identity.username)
@@ -190,36 +240,32 @@ class UmbraSession(
             UserContextResponse.ResultCase.BINDERROR ->
                 throw UmbraException("Benutzer-Bind fehlgeschlagen: ${resp.bindError}")
             UserContextResponse.ResultCase.ERROR ->
-                throw UmbraException("Benutzer-Bind fehlgeschlagen: ${resp.error.formatString}")
+                throw UmbraException("Benutzer-Bind fehlgeschlagen: ${resp.error.text()}")
             else -> throw UmbraException("Benutzer-Bind: leere Antwort")
         }
-        if (resp.hasUserContextData()) {
-            _initialPageId.value = resp.userContextData.selectedExecutorPage.ifBlank { null }
+        if (resp.hasUserContextData()) _userContext.value = resp.userContextData
+    }
+
+    private suspend fun userContextChanges() {
+        while (true) {
+            try {
+                userStub.receiveUserContextChanges(getRequest(), headers).collect { m ->
+                    if (m.hasUserContextData() &&
+                        (m.userContextData.id.isBlank() || m.userContextData.id == userContextId)
+                    ) {
+                        _userContext.value = m.userContextData
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: StatusException) {
+                if (e.status.code == Status.Code.UNIMPLEMENTED) return
+            }
+            delay(5_000)
         }
     }
 
-    private fun getMultiple() = GetMultipleRequest.newBuilder()
-        .setRequestId(nextRequestId())
-        .setUserContextId(userContextId)
-        .build()
-
-    private fun getRequest() = GetRequest.newBuilder()
-        .setRequestId(nextRequestId())
-        .setUserContextId(userContextId)
-        .build()
-
-    private suspend fun loadInitialState() {
-        val ex = executorStub.withDeadlineAfter(10, TimeUnit.SECONDS).getExecutors(getMultiple(), headers)
-        _executors.value = ex.executorsList.associateBy { it.id }
-
-        val pg = executorStub.withDeadlineAfter(10, TimeUnit.SECONDS).getExecutorPages(getMultiple(), headers)
-        _pages.value = pg.executorPagesList.associateBy { it.id }
-
-        val ms = masterStub.withDeadlineAfter(10, TimeUnit.SECONDS).getMasters(getMultiple(), headers)
-        _masters.value = ms.mastersList.associateBy { it.masterId }
-    }
-
-    /** Ping-Pong wie in UmbraConnectionClient.OpenPing: eigener Ping alle 5 s, fremde Pings beantworten. */
+    /** Ping-Pong wie UmbraConnectionClient.OpenPing: eigener Ping alle 5 s, fremde beantworten. */
     private suspend fun pingLoop(): Nothing = coroutineScope {
         val outgoing = Channel<PingPong>(Channel.UNLIMITED)
         val sender = launch {
@@ -243,114 +289,9 @@ class UmbraSession(
         throw UmbraException("Ping-Stream vom Server beendet")
     }
 
-    private suspend fun faderSender() {
-        while (true) {
-            delay(25)
-            for (id in pendingFader.keys.toList()) {
-                val value = pendingFader.remove(id) ?: continue
-                try {
-                    sendExecutor(id) { it.setFaderAbsolut(value) }
-                } catch (_: UmbraException) {
-                    // Server lehnt Wert ab (z. B. Executor leer) – Sitzung bleibt bestehen.
-                }
-            }
-        }
-    }
-
-    private suspend fun executorChanges() {
-        executorStub.receiveExecutorChanges(getRequest(), headers).collect { m ->
-            when (m.changeType) {
-                EChangeType.Added, EChangeType.Changed ->
-                    if (m.hasExecutorData()) _executors.update { it + (m.executorData.id to m.executorData) }
-                EChangeType.Removed -> {
-                    val id = m.executorId.ifBlank { m.executorData.id }
-                    _executors.update { it - id }
-                }
-                else -> Unit
-            }
-        }
-        throw UmbraException("Executor-Stream beendet")
-    }
-
-    private suspend fun executorPageChanges() {
-        executorStub.receiveExecutorPageChanges(getRequest(), headers).collect { m ->
-            when (m.changeType) {
-                EChangeType.Added, EChangeType.Changed ->
-                    if (m.hasExecutorPageData()) _pages.update { it + (m.executorPageData.id to m.executorPageData) }
-                EChangeType.Removed -> {
-                    val id = m.executorPageId.ifBlank { m.executorPageData.id }
-                    _pages.update { it - id }
-                }
-                else -> Unit
-            }
-        }
-        throw UmbraException("ExecutorPage-Stream beendet")
-    }
-
-    private suspend fun masterChanges() {
-        masterStub.receiveMasterChanges(getRequest(), headers).collect { m ->
-            when (m.changeType) {
-                EChangeType.Added, EChangeType.Changed ->
-                    if (m.hasMasterData()) _masters.update { it + (m.masterData.masterId to m.masterData) }
-                EChangeType.Removed -> {
-                    val id = m.masterId.ifBlank { m.masterData.masterId }
-                    _masters.update { it - id }
-                }
-                else -> Unit
-            }
-        }
-        throw UmbraException("Master-Stream beendet")
-    }
-
-    // ---------------------------------------------------------------- Aktionen
-
-    /** Fader 0.0 … 1.0 (Companion sendet value/100). Gedrosselt auf max. 40 Calls/s je Executor. */
-    fun setFader(executorId: String, value: Double) {
-        pendingFader[executorId] = value.coerceIn(0.0, 1.0)
-    }
-
-    /** Taste 1..4 drücken (true) bzw. loslassen (false). */
-    suspend fun setButton(executorId: String, button: Int, pressed: Boolean) {
-        val v = if (pressed) ENullableBool.True else ENullableBool.False
-        sendExecutor(executorId) {
-            when (button) {
-                1 -> it.setButton1(v)
-                2 -> it.setButton2(v)
-                3 -> it.setButton3(v)
-                4 -> it.setButton4(v)
-                else -> it
-            }
-        }
-    }
-
-    suspend fun masterAction(masterId: String, action: MasterActionRequest.EAction) {
-        val resp = masterStub.withDeadlineAfter(3, TimeUnit.SECONDS).masterAction(
-            MasterActionRequest.newBuilder()
-                .setRequestId(nextRequestId())
-                .setMasterId(masterId)
-                .setAction(action)
-                .build(),
-            headers
-        )
-        if (!resp.ok) throw UmbraException("MasterAction $action: ${resp.message.formatString}")
-    }
-
-    private suspend fun sendExecutor(
-        executorId: String,
-        apply: (SetExecutorValuesRequest.Builder) -> SetExecutorValuesRequest.Builder
-    ) {
-        val req = apply(
-            SetExecutorValuesRequest.newBuilder()
-                .setRequestId(nextRequestId())
-                .setExecutorId(executorId)
-                .setUserContextId(userContextId)
-        ).build()
-        val resp = executorStub.withDeadlineAfter(3, TimeUnit.SECONDS).setExecutorValues(req, headers)
-        if (!resp.ok) throw UmbraException("SetExecutorValues: ${resp.message.formatString}")
-    }
-
     /** Best-effort Logoff + Kanal schließen. */
     suspend fun close(): Unit = withContext(NonCancellable) {
+        actScope = null
         if (sessionId != null) {
             withTimeoutOrNull(1_500) {
                 try {
@@ -365,8 +306,33 @@ class UmbraSession(
         channel.shutdownNow()
     }
 
-    private companion object {
-        val SESSION_KEY: Metadata.Key<String> =
+    companion object {
+        const val APP_VERSION = "0.2.0"
+
+        fun buildProgramInfo(identity: ClientIdentity, netId: String): ClientProgramInfo {
+            val clientInfo = ClientInfo.newBuilder()
+                .setHostname(Build.MODEL ?: "Android")
+                .addAllIps(localIpv4())
+                .setType(EClientType.ExternalTool)
+                .setClientname(identity.clientName)
+                .setRuntimeid(identity.runtimeId)
+                .setNetworkid(netId)
+                .setClientCapabilities(0)
+                .build()
+            val program = ProgramInfo.newBuilder()
+                .setProgramName("DMXC3 Remote (Android)")
+                .setVendor("private")
+                .setProgramVersion(APP_VERSION)
+                .setBuildDate(System.currentTimeMillis())
+                .build()
+            return ClientProgramInfo.newBuilder()
+                .setProgramInfo(program)
+                .setClientInfo(clientInfo)
+                .setClientTimestampUTC(System.currentTimeMillis())
+                .build()
+        }
+
+        private val SESSION_KEY: Metadata.Key<String> =
             Metadata.Key.of("sessionid", Metadata.ASCII_STRING_MARSHALLER)
 
         fun localIpv4(): List<String> = runCatching {

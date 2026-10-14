@@ -14,6 +14,14 @@ try {
     Get-ChildItem $dst -Force | Where-Object { $_.Name -ne ".gitkeep" } | Remove-Item -Recurse -Force
     Copy-Item (Join-Path $src.FullName "proto\Common") $dst -Recurse
     Copy-Item (Join-Path $src.FullName "proto\Client") $dst -Recurse
+
+    # protoc-Java-Konflikt: CURRENT_PROPERTYVALUE erzeugt die int-Konstante CURRENT_PROPERTYVALUE_VALUE,
+    # die mit dem gleichnamigen Enum-Wert (=3) kollidiert. Umbenennung ist wire-kompatibel.
+    $dev = Join-Path $dst "Common\Types\Device\DeviceServiceTypes.proto"
+    $txt = [IO.File]::ReadAllText($dev)
+    $txt = $txt -replace '\bCURRENT_PROPERTYVALUE_VALUE = 3;', 'CURRENT_PROPERTYVALUE_VAL = 3;'
+    [IO.File]::WriteAllText($dev, $txt)
+    if (-not ($txt -match 'CURRENT_PROPERTYVALUE_VAL = 3;')) { throw "Patch EValueType fehlgeschlagen" }
     $n = (Get-ChildItem $dst -Recurse -Filter *.proto).Count
     Write-Host "Protos $Version -> $dst ($n Dateien)"
 }

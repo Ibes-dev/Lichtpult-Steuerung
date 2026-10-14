@@ -101,6 +101,10 @@ fun ConnectScreen(vm: AppViewModel, conn: ConnState, modifier: Modifier = Modifi
                     Text("${d.host}:${d.port}  ·  ${d.hostname}", style = MaterialTheme.typography.bodySmall)
                     if (d.projectName.isNotBlank()) Text("Projekt: ${d.projectName}", style = MaterialTheme.typography.bodySmall)
                     Text("NetID: ${d.netId}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    TextButton(onClick = {
+                        persistIdentity()
+                        vm.requestAdmission(d)
+                    }) { Text("Freigabe anfragen") }
                 }
             }
         }

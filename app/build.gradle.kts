@@ -7,6 +7,9 @@ plugins {
     id("com.google.protobuf")
 }
 
+val buildNumber = (project.findProperty("buildNumber") as String?)?.toIntOrNull() ?: 1
+val keystoreFile = System.getenv("KEYSTORE_FILE")?.takeIf { it.isNotBlank() && file(it).exists() }
+
 val grpcVersion = "1.68.1"
 val grpcKotlinVersion = "1.4.1"
 val protobufVersion = "3.25.5"
@@ -19,13 +22,25 @@ android {
         applicationId = "de.sebi.dmxc3remote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = buildNumber
+        versionName = "0.2.0.$buildNumber"
+    }
+
+    signingConfigs {
+        if (keystoreFile != null) {
+            create("release") {
+                storeFile = file(keystoreFile)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (keystoreFile != null) signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -89,4 +104,6 @@ dependencies {
     implementation("io.grpc:grpc-kotlin-stub:$grpcKotlinVersion")
     implementation("com.google.protobuf:protobuf-javalite:$protobufVersion")
     compileOnly("org.apache.tomcat:annotations-api:6.0.53")
+
+    testImplementation("junit:junit:4.13.2")
 }

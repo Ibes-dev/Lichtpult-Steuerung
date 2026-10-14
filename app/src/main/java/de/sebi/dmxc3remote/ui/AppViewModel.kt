@@ -1,6 +1,5 @@
 package de.sebi.dmxc3remote.ui
 
-import LumosProtobuf.Master.MasterServiceCRUDTypes.MasterActionRequest
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -9,9 +8,9 @@ import de.sebi.dmxc3remote.net.DiscoveredUmbra
 import de.sebi.dmxc3remote.net.Prefs
 import de.sebi.dmxc3remote.net.UmbraSession
 import de.sebi.dmxc3remote.net.UmbraTarget
+import de.sebi.dmxc3remote.net.describe
+import de.sebi.dmxc3remote.net.informClientExists
 import de.sebi.dmxc3remote.net.umbraDiscovery
-import io.grpc.Status
-import io.grpc.StatusException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -52,11 +51,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         startDiscovery()
     }
 
+    private fun identity() = ClientIdentity(prefs.clientName, prefs.runtimeId, prefs.username, prefs.password)
+
     private fun startDiscovery() {
         if (discoveryJob?.isActive == true) return
         discoveryJob = viewModelScope.launch {
             launch {
-                // Einträge, die > 15 s keinen Broadcast mehr gesendet haben, ausblenden
                 while (isActive) {
                     delay(5_000)
                     val limit = System.currentTimeMillis() - 15_000
@@ -90,10 +90,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             while (isActive) {
                 attempt++
                 _conn.value = ConnState.Connecting(target, attempt)
-                val s = UmbraSession(
-                    target,
-                    ClientIdentity(prefs.clientName, prefs.runtimeId, prefs.username, prefs.password)
-                )
+                val s = UmbraSession(target, identity())
                 var failure: String
                 try {
                     s.run {
@@ -126,48 +123,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         startDiscovery()
     }
 
-    fun setFader(executorId: String, value: Float) {
-        _session.value?.setFader(executorId, value.toDouble())
-    }
-
-    fun setButton(executorId: String, button: Int, pressed: Boolean) {
-        val s = _session.value ?: return
+    /** Freigabe anfragen: Client erscheint in der DMXC3-Netzwerkverwaltung; zugewiesene NetID wird übernommen. */
+    fun requestAdmission(d: DiscoveredUmbra) {
         viewModelScope.launch {
             try {
-                s.setButton(executorId, button, pressed)
+                val r = informClientExists(d.host, d.port, identity())
+                r.clientName?.let { prefs.clientName = it }
+                if (r.netId != null) {
+                    _lastError.value = "Freigabe erhalten – NetID ${r.netId}"
+                    connect(UmbraTarget(d.host, d.port, r.netId, d.clientName.ifBlank { d.host }))
+                } else {
+                    _lastError.value = "Angemeldet bei ${r.umbraName ?: d.host}. In der DMXC3-GUI unter Netzwerk dem Netzwerk zuweisen, dann erneut anfragen."
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _lastError.value = e.describe()
-            }
-        }
-    }
-
-    fun masterAction(masterId: String, action: MasterActionRequest.EAction) {
-        val s = _session.value ?: return
-        viewModelScope.launch {
-            try {
-                s.masterAction(masterId, action)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _lastError.value = e.describe()
+                _lastError.value = "Freigabe: ${e.describe()}"
             }
         }
     }
 
     fun clearError() {
         _lastError.value = null
-    }
-
-    private fun Throwable.describe(): String = when (this) {
-        is StatusException -> when (status.code) {
-            Status.Code.UNAVAILABLE -> "Umbra nicht erreichbar (${status.description ?: "UNAVAILABLE"})"
-            Status.Code.PERMISSION_DENIED -> "Zugriff verweigert – NetID/Freigabe prüfen"
-            Status.Code.UNAUTHENTICATED -> "Nicht authentifiziert – Sitzung ungültig"
-            Status.Code.DEADLINE_EXCEEDED -> "Zeitüberschreitung"
-            else -> "${status.code}: ${status.description ?: ""}"
-        }
-        else -> message ?: javaClass.simpleName
     }
 }

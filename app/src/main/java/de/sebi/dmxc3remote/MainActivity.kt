@@ -19,7 +19,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import de.sebi.dmxc3remote.ui.AppViewModel
 import de.sebi.dmxc3remote.ui.ConnState
 import de.sebi.dmxc3remote.ui.ConnectScreen
-import de.sebi.dmxc3remote.ui.ControlScreen
+import de.sebi.dmxc3remote.ui.MainScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -48,7 +48,7 @@ private fun App(vm: AppViewModel = viewModel()) {
     val s = session
     val c = conn
     if (c is ConnState.Connected && s != null) {
-        ControlScreen(vm, s, c.target, Modifier.fillMaxSize().safeDrawingPadding())
+        MainScreen(vm, s, c.target, Modifier.fillMaxSize().safeDrawingPadding())
     } else {
         ConnectScreen(vm, c, Modifier.fillMaxSize().safeDrawingPadding())
     }
