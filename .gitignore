@@ -1,0 +1,7 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+app/src/main/proto/*
+!app/src/main/proto/.gitkeep
