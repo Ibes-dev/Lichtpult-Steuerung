@@ -114,15 +114,23 @@ fun ExecutorScreen(s: UmbraSession) {
     Column(Modifier.fillMaxSize()) {
         ModuleError(err)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            val tabs = listOf(ALL) + sortedPages.map { it.id }
-            val sel = tabs.indexOf(pageId).coerceAtLeast(0)
-            ScrollableTabRow(selectedTabIndex = sel, edgePadding = 8.dp, modifier = Modifier.weight(1f)) {
-                tabs.forEachIndexed { i, id ->
-                    val label = if (id == ALL) "Alle" else pages[id]?.let { "${it.pageNumber} ${it.name}".trim() } ?: id
-                    Tab(selected = i == sel, onClick = {
-                        localPage = id
-                        if (syncPage && id != ALL) m.selectPage(id)
-                    }, text = { Text(label, maxLines = 1) })
+            // Bewusst keine ScrollableTabRow: bei sich ändernder Tab-Anzahl + Index crasht deren Indikator
+            LazyRow(
+                Modifier.weight(1f).padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                item {
+                    FilterChip(selected = pageId == ALL, onClick = { localPage = ALL }, label = { Text("Alle") })
+                }
+                items(sortedPages, key = { it.id }) { p ->
+                    FilterChip(
+                        selected = pageId == p.id,
+                        onClick = {
+                            localPage = p.id
+                            if (syncPage) m.selectPage(p.id)
+                        },
+                        label = { Text("${p.pageNumber} ${p.name}".trim(), maxLines = 1) }
+                    )
                 }
             }
             Checkbox(checked = syncPage, onCheckedChange = { syncPage = it })
