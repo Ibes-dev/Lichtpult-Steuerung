@@ -56,6 +56,7 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore) {
     val desks by store.desks.collectAsStateWithLifecycle()
     val fb by s.softdesk.feedback.collectAsStateWithLifecycle()
     val registered by s.softdesk.registered.collectAsStateWithLifecycle()
+    val server by s.softdesk.serverCounts.collectAsStateWithLifecycle()
     val err by s.softdesk.error.collectAsStateWithLifecycle()
     var deskId by rememberSaveable { mutableStateOf<String?>(null) }
     var edit by rememberSaveable { mutableStateOf(false) }
@@ -72,28 +73,31 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore) {
                     FilterChip(selected = desk?.id == d.id, onClick = { deskId = d.id }, label = { Text(d.name) })
                 }
             }
-            Text("$registered reg.", style = MaterialTheme.typography.labelSmall)
-            Switch(checked = edit, onCheckedChange = { edit = it }, modifier = Modifier.padding(start = 6.dp))
-            Text("Edit", style = MaterialTheme.typography.labelSmall)
+            Text("Bearbeiten", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim, modifier = Modifier.padding(start = 8.dp, end = 6.dp))
+            Switch(checked = edit, onCheckedChange = { edit = it })
         }
+        Text(
+            server?.let { "In DMXControl sichtbar: ${it.first} Eingänge, ${it.second} Ausgänge" }
+                ?: "$registered Elemente angemeldet",
+            style = MaterialTheme.typography.labelSmall,
+            color = Desk.TextDim,
+            modifier = Modifier.padding(horizontal = 10.dp)
+        )
         if (edit) {
             Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedButton(onClick = { deskId = store.addDesk("Softdesk ${desks.size + 1}") }) { Text("+ Softdesk") }
+                OutlinedButton(onClick = { deskId = store.addDesk("Softdesk ${desks.size + 1}") }) { Text("Neues Softdesk") }
                 if (desk != null) {
-                    OutlinedButton(onClick = { deskDialog = true }) { Text("Softdesk …") }
-                    OutlinedButton(onClick = { adding = true }) { Text("+ Element") }
+                    OutlinedButton(onClick = { deskDialog = true }) { Text("Einstellungen") }
+                    OutlinedButton(onClick = { adding = true }) { Text("Element hinzufügen") }
                 }
             }
         }
         if (desk == null) {
-            Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-                Text(
-                    "Noch kein Softdesk. Edit einschalten, Softdesk und Elemente anlegen. " +
-                        "Die Elemente erscheinen danach in der DMXC3-Eingangszuweisung unter \"Android: ${s.clientName}\" " +
-                        "und werden dort mit Funktionen verdrahtet.",
-                    textAlign = TextAlign.Center
-                )
-            }
+            EmptyHint(
+                "Noch kein Softdesk",
+                "Bearbeiten einschalten und ein Softdesk mit Tasten und Fadern anlegen. Die Elemente erscheinen in der " +
+                    "DMXControl-Eingangszuweisung unter \"Android: ${s.clientName}\" und werden dort verdrahtet."
+            )
         } else {
             LazyVerticalGrid(
                 GridCells.Fixed(desk.columns),
@@ -110,7 +114,7 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore) {
                                     .background(Color.Black.copy(alpha = 0.55f))
                                     .clickableNoRipple { editing = e },
                                 contentAlignment = Alignment.Center
-                            ) { Text("✎ ${e.name}", maxLines = 2, textAlign = TextAlign.Center) }
+                            ) { Text("${e.name} bearbeiten", maxLines = 2, textAlign = TextAlign.Center, color = Desk.Text) }
                         }
                     }
                 }
@@ -155,7 +159,7 @@ private fun SdControl(s: UmbraSession, e: SdElement, fb: LumosProtobuf.CommonTyp
     val frame = Modifier
         .fillMaxWidth()
         .clip(RoundedCornerShape(8.dp))
-        .border(1.dp, accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+        .background(Desk.Panel)
     when (e.type) {
         SdType.BUTTON -> Box(frame.height(SD_HEIGHT_SMALL)) {
             ExecButton(e.name, fb?.asBool() == true, accent) { p -> s.softdesk.press(e, p) }
@@ -229,8 +233,8 @@ private fun ElementDialog(
                 }
                 if (onMove != null) {
                     Row {
-                        TextButton(onClick = { onMove(-1) }) { Text("◀ nach vorn") }
-                        TextButton(onClick = { onMove(1) }) { Text("nach hinten ▶") }
+                        TextButton(onClick = { onMove(-1) }) { Text("Nach vorn") }
+                        TextButton(onClick = { onMove(1) }) { Text("Nach hinten") }
                     }
                 }
                 if (current != null) {

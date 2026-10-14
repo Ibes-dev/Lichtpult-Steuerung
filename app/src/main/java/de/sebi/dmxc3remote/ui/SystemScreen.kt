@@ -36,23 +36,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import de.sebi.dmxc3remote.net.UmbraSession
 
 @Composable
-private fun Section(title: String, error: String? = null, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            ModuleError(error)
-            content()
-        }
-    }
-}
-
-@Composable
 fun SystemScreen(s: UmbraSession) {
     var section by rememberSaveable { mutableStateOf(0) }
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            listOf("Übersicht", "DMX-Monitor", "Hardware").forEachIndexed { i, t ->
-                if (i == section) Button(onClick = {}) { Text(t) } else OutlinedButton(onClick = { section = i }) { Text(t) }
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("Projekt", "DMX-Ausgabe", "Hardware").forEachIndexed { i, t ->
+                androidx.compose.material3.FilterChip(selected = i == section, onClick = { section = i }, label = { Text(t) })
             }
         }
         when (section) {
@@ -76,20 +65,20 @@ private fun Overview(s: UmbraSession) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Section("Projekt", projErr) {
+        Section("Projekt", error = projErr) {
             Text(
-                "Status: " + when (state) {
-                    EProjectState.EProjectState_LOADED -> "geladen"
-                    EProjectState.EProjectState_LOADING -> "lädt …"
-                    EProjectState.EProjectState_CLOSING -> "schließt …"
-                    EProjectState.EProjectState_CLOSED -> "geschlossen"
-                    else -> "unbekannt"
-                } + if (dirty) " · ungespeicherte Änderungen" else ""
+                when (state) {
+                    EProjectState.EProjectState_LOADED -> if (dirty) "Projekt geladen, ungespeicherte Änderungen" else "Projekt geladen, alles gespeichert"
+                    EProjectState.EProjectState_LOADING -> "Projekt wird geladen"
+                    EProjectState.EProjectState_CLOSING -> "Projekt wird geschlossen"
+                    EProjectState.EProjectState_CLOSED -> "Kein Projekt geöffnet"
+                    else -> "Projektstatus unbekannt"
+                }
             )
             Button(onClick = s.project::save, enabled = saving == null) { Text(saving ?: "Projekt speichern") }
         }
-        Section("Hauptschalter", swErr) {
-            if (switches.isEmpty()) Text("Keine", style = MaterialTheme.typography.bodySmall)
+        Section("Hauptschalter", error = swErr) {
+            if (switches.isEmpty()) Text("Keine Hauptschalter im Projekt.", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
             switches.values.sortedBy { it.name }.forEach { sw ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(sw.name, modifier = Modifier.weight(1f))
@@ -97,15 +86,17 @@ private fun Overview(s: UmbraSession) {
                 }
             }
         }
-        Section("Modulstatus") {
+        Section("Verbindung zu den Funktionsbereichen") {
             s.modules.forEach { m ->
                 val e by m.error.collectAsStateWithLifecycle()
                 Row {
                     Text(m.title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        e ?: "OK",
-                        color = if (e == null) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall
+                    if (e == null) StatusPill("Bereit", Desk.Green) else Text(
+                        e ?: "",
+                        color = Desk.Red,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        modifier = Modifier.weight(1f)
                     )
                 }
             }
@@ -128,7 +119,7 @@ private fun DmxMonitor(s: UmbraSession) {
         ModuleError(err)
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { m.setUniverse(universe - 1) }, enabled = universe > 1) { Text("◀") }
-            Text("Universum $universe", style = MaterialTheme.typography.titleMedium)
+            Text("Universum $universe", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 8.dp))
             TextButton(onClick = { m.setUniverse(universe + 1) }) { Text("▶") }
         }
         Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -171,9 +162,9 @@ private fun Hardware(s: UmbraSession) {
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         ModuleError(err)
-        TextButton(onClick = m::reload) { Text("Neu laden") }
+        TextButton(onClick = m::reload) { Text("Hardware neu einlesen") }
         Section("DMX-Interfaces") {
-            if (interfaces.isEmpty()) Text("Keine", style = MaterialTheme.typography.bodySmall)
+            if (interfaces.isEmpty()) Text("Keine Interfaces in Verwendung.", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
             interfaces.values.forEach { st ->
                 val d = st.meta.interfaceData
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -181,10 +172,10 @@ private fun Hardware(s: UmbraSession) {
                         Text("${d.vendor} ${d.model}".trim().ifBlank { d.interfaceId })
                         Text(
                             listOfNotNull(
-                                d.serialNr.ifBlank { null }?.let { "SN $it" },
-                                if (st.meta.available) "verfügbar" else "nicht verfügbar",
-                                st.working?.let { if (it) "arbeitet" else "Fehler" }
-                            ).joinToString(" · "),
+                                d.serialNr.ifBlank { null }?.let { "Seriennr. $it" },
+                                if (st.meta.available) "angeschlossen" else "nicht gefunden",
+                                st.working?.let { if (it) "sendet" else "gestört" }
+                            ).joinToString(", "),
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -204,17 +195,17 @@ private fun Hardware(s: UmbraSession) {
             }
         }
         Section("RDM") {
-            OutlinedButton(onClick = m::rdmDiscovery) { Text("Discovery starten") }
+            OutlinedButton(onClick = m::rdmDiscovery) { Text("RDM-Geräte suchen") }
             rdm.forEach { d ->
                 Text(
-                    "${d.uid}  ·  Adr. ${d.info.dmx512StartAddress}  ·  ${d.info.dmx512Footprint} Kan." +
-                        if (!d.present) "  (offline)" else "",
+                    "${d.uid}: Startadresse ${d.info.dmx512StartAddress}, ${d.info.dmx512Footprint} Kanäle" +
+                        if (!d.present) ", nicht erreichbar" else "",
                     fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall
                 )
             }
         }
         Section("Stromkreise") {
-            if (power.isEmpty()) Text("Keine", style = MaterialTheme.typography.bodySmall)
+            if (power.isEmpty()) Text("Keine Stromkreise angelegt.", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
             power.sortedBy { it.number }.forEach { p ->
                 val a = amps[p.id]
                 Text(

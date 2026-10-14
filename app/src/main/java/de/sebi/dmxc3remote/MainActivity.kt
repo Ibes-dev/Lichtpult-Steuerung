@@ -31,6 +31,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import de.sebi.dmxc3remote.ui.AppViewModel
 import de.sebi.dmxc3remote.ui.ConnState
 import de.sebi.dmxc3remote.ui.ConnectScreen
+import de.sebi.dmxc3remote.ui.DeskTheme
 import de.sebi.dmxc3remote.ui.MainScreen
 
 class MainActivity : ComponentActivity() {
@@ -41,14 +42,7 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         enableEdgeToEdge()
         setContent {
-            MaterialTheme(
-                colorScheme = darkColorScheme(
-                    primary = Color(0xFFFFB300),
-                    secondary = Color(0xFF4FC3F7),
-                    background = Color(0xFF101010),
-                    surface = Color(0xFF101010)
-                )
-            ) {
+            DeskTheme {
                 Surface(Modifier.fillMaxSize()) {
                     var crash by remember { mutableStateOf(lastCrash) }
                     val c = crash

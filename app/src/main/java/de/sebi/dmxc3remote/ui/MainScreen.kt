@@ -1,30 +1,52 @@
 package de.sebi.dmxc3remote.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Brightness6
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.FormatListNumbered
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -32,13 +54,29 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import de.sebi.dmxc3remote.net.UmbraSession
 import de.sebi.dmxc3remote.net.UmbraTarget
 
-private val TABS = listOf("Executoren", "Softdesk", "Cuelists", "Master", "Macros", "Programmer", "Medien", "Konsole", "System")
+enum class Dest(val label: String, val icon: ImageVector) {
+    EXEC("Executoren", Icons.Filled.Tune),
+    CUE("Cuelists", Icons.Filled.FormatListNumbered),
+    SOFT("Softdesk", Icons.Filled.Dashboard),
+    PROG("Programmer", Icons.Filled.Palette),
+    MASTER("Master", Icons.Filled.Brightness6),
+    MACRO("Macros", Icons.Filled.Bolt),
+    MEDIA("Beat & Medien", Icons.Filled.MusicNote),
+    CONSOLE("Befehle", Icons.Filled.Code),
+    SYSTEM("System", Icons.Filled.Settings),
+    MORE("Mehr", Icons.Filled.MoreHoriz)
+}
+
+/** Auf dem Handy direkt in der unteren Leiste, der Rest unter "Mehr". */
+private val PHONE_PRIMARY = listOf(Dest.EXEC, Dest.CUE, Dest.SOFT, Dest.PROG, Dest.MORE)
+private val ALL = Dest.entries.filter { it != Dest.MORE }
 
 @Composable
 fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, modifier: Modifier = Modifier) {
@@ -46,32 +84,81 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
     LaunchedEffect(session) {
         session.events.collect { ev -> snackbar.showSnackbar(ev.text) }
     }
-    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var destName by rememberSaveable { mutableStateOf(Dest.EXEC.name) }
+    val dest = Dest.valueOf(destName)
+    val wide = isWide()
 
-    Scaffold(
-        modifier = modifier,
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        snackbarHost = { SnackbarHost(snackbar) },
-        topBar = { TopBar(vm, session, target) }
-    ) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize()) {
-            ScrollableTabRow(selectedTabIndex = tab, edgePadding = 4.dp) {
-                TABS.forEachIndexed { i, t ->
-                    Tab(selected = i == tab, onClick = { tab = i }, text = { Text(t, maxLines = 1) })
+    Box(modifier.background(Desk.Surface)) {
+        Column(Modifier.fillMaxSize()) {
+            TopBar(vm, session, target)
+            GlobalStrip(session)
+            Row(Modifier.weight(1f)) {
+                if (wide) {
+                    NavigationRail(containerColor = Desk.Panel, windowInsets = WindowInsets(0, 0, 0, 0)) {
+                        ALL.forEach { d ->
+                            NavigationRailItem(
+                                selected = dest == d,
+                                onClick = { destName = d.name },
+                                icon = { Icon(d.icon, contentDescription = null) },
+                                label = { Text(d.label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                            )
+                        }
+                    }
+                    VerticalDivider(color = Desk.Line)
+                }
+                Box(Modifier.weight(1f).fillMaxSize()) {
+                    Content(dest, vm, session) { destName = it.name }
                 }
             }
-            Box(Modifier.fillMaxSize()) {
-                when (tab) {
-                    0 -> ExecutorScreen(session)
-                    1 -> SoftdeskScreen(session, vm.softdesks)
-                    2 -> CuelistScreen(session)
-                    3 -> MasterScreen(session)
-                    4 -> MacroScreen(session)
-                    5 -> ProgrammerScreen(session)
-                    6 -> MediaScreen(session)
-                    7 -> ConsoleScreen(session)
-                    else -> SystemScreen(session)
+            if (!wide) {
+                NavigationBar(containerColor = Desk.Panel, windowInsets = WindowInsets(0, 0, 0, 0)) {
+                    PHONE_PRIMARY.forEach { d ->
+                        val selected = dest == d || (d == Dest.MORE && dest !in PHONE_PRIMARY)
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = { destName = d.name },
+                            icon = { Icon(d.icon, contentDescription = null) },
+                            label = { Text(d.label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        )
+                    }
                 }
+            }
+        }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = if (wide) 16.dp else 80.dp))
+    }
+}
+
+@Composable
+private fun Content(dest: Dest, vm: AppViewModel, s: UmbraSession, navigate: (Dest) -> Unit) {
+    when (dest) {
+        Dest.EXEC -> ExecutorScreen(s)
+        Dest.CUE -> CuelistScreen(s)
+        Dest.SOFT -> SoftdeskScreen(s, vm.softdesks)
+        Dest.PROG -> ProgrammerScreen(s)
+        Dest.MASTER -> MasterScreen(s)
+        Dest.MACRO -> MacroScreen(s)
+        Dest.MEDIA -> MediaScreen(s)
+        Dest.CONSOLE -> ConsoleScreen(s)
+        Dest.SYSTEM -> SystemScreen(s)
+        Dest.MORE -> MoreScreen(navigate)
+    }
+}
+
+@Composable
+private fun MoreScreen(navigate: (Dest) -> Unit) {
+    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(ALL.filter { it !in PHONE_PRIMARY }) { d ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Desk.Panel)
+                    .clickable { navigate(d) }
+                    .padding(horizontal = 16.dp, vertical = 18.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(d.icon, contentDescription = null, tint = Desk.Amber)
+                Text(d.label, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 16.dp))
             }
         }
     }
@@ -79,48 +166,80 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
 
 @Composable
 private fun TopBar(vm: AppViewModel, session: UmbraSession, target: UmbraTarget) {
-    val blackout by session.globals.blackout.collectAsStateWithLifecycle()
-    val freeze by session.globals.freeze.collectAsStateWithLifecycle()
     val dirty by session.project.dirty.collectAsStateWithLifecycle()
     val saving by session.project.saving.collectAsStateWithLifecycle()
     val beat by session.beat.beat.collectAsStateWithLifecycle()
+    val interval by session.beat.intervalMs.collectAsStateWithLifecycle()
+    var menu by remember { mutableStateOf(false) }
 
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+        Modifier.fillMaxWidth().background(Desk.Panel).padding(start = 14.dp, end = 4.dp).height(52.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Beat-LED
-        Box(
-            Modifier.size(10.dp).clip(CircleShape)
-                .background(if (beat % 2L == 0L) MaterialTheme.colorScheme.secondary else Color.DarkGray)
-        )
-        Text(
-            "  ${target.label}",
-            style = MaterialTheme.typography.titleSmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-        TextButton(onClick = session.project::save, enabled = saving == null) {
-            Text(saving ?: if (dirty) "Speichern •" else "Speichern")
-        }
-        val bo = blackout == true
-        Button(
-            onClick = { session.globals.setBlackout(!bo) },
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (bo) Color(0xFFD32F2F) else MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = if (bo) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+        Box(Modifier.size(8.dp).clip(CircleShape).background(Desk.Green))
+        Column(Modifier.weight(1f).padding(start = 10.dp)) {
+            Text(target.label, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                saving ?: if (dirty) "Ungespeicherte Änderungen" else "Verbunden",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (dirty) Desk.Amber else Desk.TextDim,
+                maxLines = 1
             )
-        ) { Text("BLACKOUT") }
-        val fr = freeze == true
-        OutlinedButton(
-            onClick = { session.globals.setFreeze(!fr) },
-            colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = if (fr) MaterialTheme.colorScheme.secondary else Color.Transparent,
-                contentColor = if (fr) Color.Black else MaterialTheme.colorScheme.secondary
-            ),
-            modifier = Modifier.padding(start = 4.dp)
-        ) { Text("FREEZE") }
-        TextButton(onClick = vm::disconnect) { Text("Trennen") }
+        }
+        // Takt-Anzeige: blinkt im Beat, darunter BPM
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 6.dp)) {
+            Box(
+                Modifier.size(10.dp).clip(CircleShape)
+                    .background(if (beat % 2L == 0L) Desk.Cyan else Desk.Raised)
+            )
+            Text(
+                if (interval > 0) "${(60_000.0 / interval).toInt()} BPM" else "– BPM",
+                style = MaterialTheme.typography.labelMedium.merge(Numeric),
+                modifier = Modifier.padding(start = 6.dp)
+            )
+        }
+        IconButton(onClick = session.project::save, enabled = saving == null) {
+            Icon(Icons.Filled.Save, contentDescription = "Projekt speichern", tint = if (dirty) Desk.Amber else Desk.TextDim)
+        }
+        Box {
+            IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Menü") }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(text = { Text("Projekt speichern") }, onClick = { menu = false; session.project.save() })
+                HorizontalDivider()
+                DropdownMenuItem(text = { Text("Verbindung trennen") }, onClick = { menu = false; vm.disconnect() })
+            }
+        }
+    }
+}
+
+/** Globale Not-/Showfunktionen, immer sichtbar und groß genug für den Daumen. */
+@Composable
+private fun GlobalStrip(session: UmbraSession) {
+    val blackout by session.globals.blackout.collectAsStateWithLifecycle()
+    val freeze by session.globals.freeze.collectAsStateWithLifecycle()
+    Row(
+        Modifier.fillMaxWidth().background(Desk.Surface).padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        GlobalToggle("Blackout", blackout == true, Desk.Red, Modifier.weight(1f)) { session.globals.setBlackout(blackout != true) }
+        GlobalToggle("Freeze", freeze == true, Desk.Cyan, Modifier.weight(1f)) { session.globals.setFreeze(freeze != true) }
+    }
+}
+
+@Composable
+private fun GlobalToggle(label: String, on: Boolean, color: Color, modifier: Modifier, onClick: () -> Unit) {
+    Box(
+        modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (on) color else Desk.Raised)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            if (on) "$label aktiv" else label,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (on) Color.Black else Desk.Text
+        )
     }
 }

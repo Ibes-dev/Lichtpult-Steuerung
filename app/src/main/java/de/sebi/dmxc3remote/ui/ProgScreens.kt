@@ -8,7 +8,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -30,6 +34,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -63,50 +70,102 @@ fun ProgrammerScreen(s: UmbraSession) {
     val presetErr by s.presets.error.collectAsStateWithLifecycle()
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     val group = selected?.let { groups[it] }
+    val sortedGroups = remember(groups) { groups.values.sortedBy { it.number } }
+    val select: (String) -> Unit = { id ->
+        selected = if (selected == id) null else id
+        dm.select(listOfNotNull(selected))
+    }
 
     Column(Modifier.fillMaxSize()) {
         ModuleError(err)
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(groups.values.sortedBy { it.number }, key = { it.id }) { g ->
-                    FilterChip(
-                        selected = selected == g.id,
-                        onClick = {
-                            selected = if (selected == g.id) null else g.id
-                            dm.select(listOfNotNull(selected))
-                        },
-                        label = { Text("${g.number} ${g.name}") }
-                    )
-                }
-            }
-            OutlinedButton(onClick = dm::clearProgrammer) { Text("Clear") }
+            Text(
+                group?.name?.ifBlank { null } ?: "Keine Gruppe gewählt",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            OutlinedButton(onClick = dm::clearProgrammer) { Text("Programmer leeren") }
         }
-        LazyColumn(
-            Modifier.fillMaxSize().padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            if (group == null) {
-                item { Text("Gerätegruppe wählen", style = MaterialTheme.typography.bodyMedium) }
-            } else {
-                items(group.propertiesList) { p -> PropertyControl(s, group, p) }
-            }
-            item {
-                HorizontalDivider()
-                Text(
-                    "Presets" + if (group != null) " → ${group.name}" else " (global)",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-                ModuleError(presetErr)
-            }
-            item {
-                PresetGrid(presets.values.sortedBy { it.name }.map { it.presetId to it.name }) { id ->
-                    s.presets.invoke(id, group?.id)
+        if (isWide()) {
+            // Tablet: Gruppenliste links, Eigenschaften und Presets rechts
+            Row(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    Modifier.width(220.dp).fillMaxHeight(),
+                    contentPadding = PaddingValues(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(sortedGroups, key = { it.id }) { g -> GroupRow(g, selected == g.id) { select(g.id) } }
                 }
+                VerticalDivider(color = Desk.Line)
+                PropertyPane(s, group, presets.values.sortedBy { it.name }.map { it.presetId to it.name }, presetErr, Modifier.weight(1f))
+            }
+        } else {
+            LazyRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp)
+            ) {
+                items(sortedGroups, key = { it.id }) { g ->
+                    FilterChip(selected = selected == g.id, onClick = { select(g.id) }, label = { Text(g.name.ifBlank { "Gruppe ${g.number}" }, maxLines = 1) })
+                }
+            }
+            PropertyPane(s, group, presets.values.sortedBy { it.name }.map { it.presetId to it.name }, presetErr, Modifier.fillMaxSize())
+        }
+    }
+}
+
+@Composable
+private fun GroupRow(g: DeviceGroupDescriptor, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) Desk.Amber else Desk.Panel)
+            .clickableNoRipple(onClick)
+            .padding(horizontal = 12.dp, vertical = 12.dp)
+    ) {
+        Text(
+            g.name.ifBlank { "Gruppe ${g.number}" },
+            color = if (selected) Color.Black else Desk.Text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun PropertyPane(
+    s: UmbraSession,
+    group: DeviceGroupDescriptor?,
+    presets: List<Pair<String, String>>,
+    presetErr: String?,
+    modifier: Modifier
+) {
+    LazyColumn(
+        modifier,
+        contentPadding = PaddingValues(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        if (group == null) {
+            item {
+                Text(
+                    "Gerätegruppe wählen, um Dimmer, Farbe und Position zu setzen. Presets wirken ohne Auswahl auf alle enthaltenen Geräte.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Desk.TextDim
+                )
+            }
+        } else {
+            items(group.propertiesList) { p -> PropertyControl(s, group, p) }
+        }
+        item {
+            Section(if (group != null) "Presets für ${group.name}" else "Presets", error = presetErr) {
+                if (presets.isEmpty()) Text("Keine Presets im Projekt.", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+                PresetGrid(presets) { id -> s.presets.invoke(id, group?.id) }
             }
         }
     }
@@ -114,13 +173,19 @@ fun ProgrammerScreen(s: UmbraSession) {
 
 @Composable
 private fun PresetGrid(items: List<Pair<String, String>>, onClick: (String) -> Unit) {
+    val cols = if (isWide()) 4 else 2
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        items.chunked(3).forEach { row ->
+        items.chunked(cols).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 row.forEach { (id, name) ->
-                    OutlinedButton(onClick = { onClick(id) }, modifier = Modifier.weight(1f)) { Text(name, maxLines = 1) }
+                    Box(
+                        Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(8.dp)).background(Desk.Raised)
+                            .clickableNoRipple { onClick(id) }
+                            .padding(horizontal = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) { Text(name.ifBlank { "Preset" }, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, style = MaterialTheme.typography.labelLarge) }
                 }
-                repeat(3 - row.size) { Box(Modifier.weight(1f)) }
+                repeat(cols - row.size) { Box(Modifier.weight(1f)) }
             }
         }
     }
@@ -134,8 +199,11 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
     val key = "${g.id}:${p.id}"
     val dm = s.devices
     val label = p.displayName.ifBlank { p.name.ifBlank { p.id } }
-    Card {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Desk.Panel).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        run {
             when (p.kind()) {
                 PropKind.DOUBLE -> {
                     val range = p.doubleRange()
@@ -222,8 +290,9 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
                     }
                 }
                 PropKind.UNSUPPORTED -> Text(
-                    "$label – Typ ${p.type.name.ifBlank { p.devicePropertyTypeAQ.substringBefore(',') }} wird noch nicht unterstützt",
-                    style = MaterialTheme.typography.bodySmall
+                    "$label: Dieser Eigenschaftstyp (${p.type.name.ifBlank { p.devicePropertyTypeAQ.substringBefore(',').substringAfterLast('.') }}) lässt sich in der App noch nicht einstellen.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Desk.TextDim
                 )
             }
         }
@@ -242,7 +311,7 @@ fun ConsoleScreen(s: UmbraSession) {
 
     Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ModuleError(err)
-        Text("Aktuell: $current", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+        Text(if (current.isBlank()) "Eingabezeile leer" else "Eingabezeile: $current", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 input, { input = it }, label = { Text("Befehl") }, singleLine = true,

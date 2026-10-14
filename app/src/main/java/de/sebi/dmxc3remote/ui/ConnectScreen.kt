@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -53,11 +54,12 @@ fun ConnectScreen(vm: AppViewModel, conn: ConnState, modifier: Modifier = Modifi
         vm.prefs.password = password
     }
 
+    androidx.compose.foundation.layout.Box(modifier, contentAlignment = Alignment.TopCenter) {
     Column(
-        modifier.verticalScroll(rememberScrollState()).padding(16.dp),
+        Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("DMXControl 3 Remote", style = MaterialTheme.typography.headlineSmall)
+        Text("Mit DMXControl verbinden", style = MaterialTheme.typography.headlineSmall)
 
         when (conn) {
             is ConnState.Connecting -> Row(verticalAlignment = Alignment.CenterVertically) {
@@ -81,11 +83,11 @@ fun ConnectScreen(vm: AppViewModel, conn: ConnState, modifier: Modifier = Modifi
             }
         }
 
-        Text("Gefundene Umbra-Server", style = MaterialTheme.typography.titleMedium)
+        Text("Im Netzwerk gefunden", style = MaterialTheme.typography.titleMedium)
         if (discovered.isEmpty()) {
             Text(
-                "Keine Broadcasts empfangen (UDP 17474, Multicast 225.68.67.3). " +
-                    "Gleiches WLAN/VLAN? Multicast im AP erlaubt? Sonst manuell verbinden.",
+                "Noch kein DMXControl gefunden. Handy und PC müssen im selben Netz sein und der Access Point " +
+                    "muss Multicast durchlassen. Alternativ unten die IP-Adresse eingeben.",
                 style = MaterialTheme.typography.bodySmall
             )
         }
@@ -110,7 +112,7 @@ fun ConnectScreen(vm: AppViewModel, conn: ConnState, modifier: Modifier = Modifi
         }
 
         HorizontalDivider()
-        Text("Manuell", style = MaterialTheme.typography.titleMedium)
+        Text("Manuell verbinden", style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 host, { host = it.trim() }, label = { Text("IP / Host") },
@@ -133,7 +135,7 @@ fun ConnectScreen(vm: AppViewModel, conn: ConnState, modifier: Modifier = Modifi
         )
 
         TextButton(onClick = { advanced = !advanced }) {
-            Text(if (advanced) "Benutzer ausblenden" else "Benutzer (DMXC3-UserContext)")
+            Text(if (advanced) "Anmeldedaten ausblenden" else "Anmeldedaten ändern")
         }
         if (advanced) {
             OutlinedTextField(
@@ -168,4 +170,5 @@ fun ConnectScreen(vm: AppViewModel, conn: ConnState, modifier: Modifier = Modifi
             }) { Text("Standardwerte") }
         }
     }
+}
 }

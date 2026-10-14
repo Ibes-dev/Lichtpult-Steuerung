@@ -43,10 +43,21 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
     /** Registrierter Stand je Element: Proxy-ID -> (Desk, Element). */
     private val active = HashMap<String, Pair<Softdesk, SdElement>>()
 
-    fun proxyId(e: SdElement) = "DMXC3Remote.${s.runtimeId}.${e.id}"
-    private fun elementIdOf(proxyId: String) = proxyId.substringAfterLast('.')
+    private val prefix get() = "DMXC3Remote.${s.runtimeId}."
 
-    private fun descriptor(d: Softdesk, e: SdElement): InputElementDescriptor {
+    /** Eingang: ID unverändert zu 0.2.0, damit bestehende Verdrahtungen erhalten bleiben. */
+    fun proxyId(e: SdElement) = "$prefix${e.id}"
+
+    /** Ausgang: eigene ID (".out"). Mit identischer ID wie der Eingang tauchte der Ausgang nicht im Baum auf. */
+    fun sinkId(e: SdElement) = "$prefix${e.id}.out"
+
+    private fun elementIdOf(sinkProxyId: String) = sinkProxyId.removePrefix(prefix).removeSuffix(".out")
+
+    /** Vom Server bestätigte Anzahl eigener Eingänge/Ausgänge (GetInputSources/GetInputSinks). */
+    private val _serverCounts = MutableStateFlow<Pair<Int, Int>?>(null)
+    val serverCounts: StateFlow<Pair<Int, Int>?> = _serverCounts.asStateFlow()
+
+    private fun descriptor(d: Softdesk, e: SdElement, id: String): InputElementDescriptor {
         val io = IoInformationDescriptor.newBuilder()
         when (e.type) {
             SdType.FADER -> io.setAutoGraphIoType(EWellKnownInputType.NUMERIC)
@@ -56,7 +67,7 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
             else -> io.setAutoGraphIoType(EWellKnownInputType.BOOL)
         }
         return InputElementDescriptor.newBuilder()
-            .setId(proxyId(e))
+            .setId(id)
             .setDisplayName(e.name)
             .setCategory(
                 ParameterCategory.newBuilder()
@@ -74,37 +85,84 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
         else -> EFeedbackType.NONE
     }
 
-    private suspend fun register(d: Softdesk, e: SdElement, type: EChangeType) {
-        val desc = descriptor(d, e)
-        if (e.type.hasSource) {
-            stub.dl(5).createOrUpdateOrDeleteSourceProxy(
-                InputSourceProxyRequest.newBuilder()
-                    .setRequestId(s.nextRequestId())
-                    .setInputSourceId(desc.id)
-                    .setChangeType(type)
-                    .setSource(InputSourceDescriptor.newBuilder().setElement(desc).setReceivesFeedback(feedbackType(e)))
-                    .setUserContextId(s.userContextId)
-                    .setRuntimeId(s.runtimeId)
-                    .build(),
-                s.headers
-            ).requireOk("SourceProxy ${e.name}")
+    private suspend fun sourceCall(d: Softdesk, e: SdElement, type: EChangeType) {
+        stub.dl(5).createOrUpdateOrDeleteSourceProxy(
+            InputSourceProxyRequest.newBuilder()
+                .setRequestId(s.nextRequestId())
+                .setInputSourceId(proxyId(e))
+                .setChangeType(type)
+                .setSource(
+                    InputSourceDescriptor.newBuilder()
+                        .setElement(descriptor(d, e, proxyId(e)))
+                        .setReceivesFeedback(feedbackType(e))
+                )
+                .setUserContextId(s.userContextId)
+                .setRuntimeId(s.runtimeId)
+                .build(),
+            s.headers
+        ).requireOk("Eingang ${e.name} ($type)")
+    }
+
+    private suspend fun sinkCall(d: Softdesk, e: SdElement, type: EChangeType) {
+        stub.dl(5).createOrUpdateOrDeleteSinkProxy(
+            InputSinkProxyRequest.newBuilder()
+                .setRequestId(s.nextRequestId())
+                .setInputSinkId(sinkId(e))
+                .setChangeType(type)
+                .setSink(
+                    InputSinkDescriptor.newBuilder()
+                        .setElement(descriptor(d, e, sinkId(e)))
+                        .setProvidesFeedback(feedbackType(e))
+                )
+                .setUserContextId(s.userContextId)
+                .setRuntimeId(s.runtimeId)
+                .build(),
+            s.headers
+        ).requireOk("Ausgang ${e.name} ($type)")
+    }
+
+    /** Added, bei Ablehnung Changed (existiert evtl. noch). Fehler werden gemeldet, nicht verschluckt. */
+    private suspend fun upsert(name: String, call: suspend (EChangeType) -> Unit, isNew: Boolean) {
+        if (!isNew) {
+            call(EChangeType.Changed)
+            return
         }
-        if (e.type.hasSink) {
-            stub.dl(5).createOrUpdateOrDeleteSinkProxy(
-                InputSinkProxyRequest.newBuilder()
-                    .setRequestId(s.nextRequestId())
-                    .setInputSinkId(desc.id)
-                    .setChangeType(type)
-                    .setSink(InputSinkDescriptor.newBuilder().setElement(desc).setProvidesFeedback(feedbackType(e)))
-                    .setUserContextId(s.userContextId)
-                    .setRuntimeId(s.runtimeId)
-                    .build(),
-                s.headers
-            ).requireOk("SinkProxy ${e.name}")
+        try {
+            call(EChangeType.Added)
+        } catch (first: UmbraException) {
+            try {
+                call(EChangeType.Changed)
+            } catch (second: UmbraException) {
+                s.emit("$name: ${first.message} / ${second.message}", isError = true)
+                throw second
+            }
         }
     }
 
-    private suspend fun unregister(d: Softdesk, e: SdElement) = runCatching { register(d, e, EChangeType.Removed) }
+    private suspend fun register(d: Softdesk, e: SdElement, isNew: Boolean) {
+        var failed: Throwable? = null
+        if (e.type.hasSource) {
+            runCatching { upsert("Eingang ${e.name}", { t -> sourceCall(d, e, t) }, isNew) }.onFailure { failed = it }
+        }
+        if (e.type.hasSink) {
+            runCatching { upsert("Ausgang ${e.name}", { t -> sinkCall(d, e, t) }, isNew) }.onFailure { failed = it }
+        }
+        failed?.let { throw it }
+    }
+
+    private suspend fun unregister(d: Softdesk, e: SdElement) {
+        if (e.type.hasSource) runCatching { sourceCall(d, e, EChangeType.Removed) }
+        if (e.type.hasSink) runCatching { sinkCall(d, e, EChangeType.Removed) }
+    }
+
+    /** Gegenprobe: was der Server tatsächlich als eigene Eingänge/Ausgänge führt. */
+    private suspend fun verify() {
+        val src = stub.dl(10).getInputSources(s.getMultiple(), s.headers).sourcesList
+            .count { it.element.id.startsWith(prefix) }
+        val snk = stub.dl(10).getInputSinks(s.getMultiple(), s.headers).sinksList
+            .count { it.element.id.startsWith(prefix) }
+        _serverCounts.value = src to snk
+    }
 
     /** Abgleich lokaler Softdesks mit den registrierten Proxies. */
     private suspend fun sync(desks: List<Softdesk>) {
@@ -117,25 +175,20 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
                 active.remove(pid)
             }
         }
+        var errors = 0
         for ((pid, de) in wanted) {
             val old = active[pid]
-            when {
-                old == null -> {
-                    try {
-                        register(de.first, de.second, EChangeType.Added)
-                    } catch (e: UmbraException) {
-                        // existiert evtl. noch aus vorheriger Sitzung -> aktualisieren
-                        register(de.first, de.second, EChangeType.Changed)
-                    }
-                    active[pid] = de
-                }
-                old != de -> {
-                    register(de.first, de.second, EChangeType.Changed)
-                    active[pid] = de
-                }
+            if (old == de) continue
+            try {
+                register(de.first, de.second, isNew = old == null)
+                active[pid] = de
+            } catch (e: UmbraException) {
+                errors++
             }
         }
+        if (errors > 0) s.emit("Softdesk: $errors Element(e) nicht registriert", isError = true)
         _registered.value = active.size
+        runCatching { verify() }.onFailure { _serverCounts.value = null }
     }
 
     override suspend fun load() {
@@ -147,7 +200,7 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
         launch { store.desks.collect { sync(it) } }
         stub.receiveSinkProxyChanges(s.getRequest(), s.headers).collect { m ->
             val upd = m.changedValuesList
-                .filter { it.inputSinkId.startsWith("DMXC3Remote.${s.runtimeId}.") }
+                .filter { it.inputSinkId.startsWith(prefix) }
                 .associate { elementIdOf(it.inputSinkId) to it.newValue }
             if (upd.isNotEmpty()) _feedback.update { it + upd }
         }
