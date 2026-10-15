@@ -21,50 +21,57 @@ import kotlinx.coroutines.launch
 
 /**
  * Softdesk über Input-Proxies (InputClient.CreateOrUpdateOrDeleteSource/SinkProxy):
- * Jedes Element wird als Eingang (Source) und/oder Ausgang (Sink) im Baum der
- * DMXC3-Eingangszuweisung registriert und dort wie ein Hardware-Controller verdrahtet.
- * Werte gehen als SourceProxy-Changed hinaus, Feedback kommt über ReceiveSinkProxyChanges.
+ * Jedes Element wird als Eingang und/oder Ausgang im Baum der DMXC3-Eingangszuweisung
+ * registriert und dort wie ein Hardware-Controller verdrahtet.
  *
  * UNVERIFIZIERT (keine öffentliche Referenzimplementierung):
- *  - Registrierung per changeType=Added, Werte per changeType=Changed + sourceValue
- *  - Source und Sink eines Elements mit derselben ID (gekoppeltes Feedback wie bei Motorfadern)
- *  - Ob der Server Proxies nach Verbindungsabbruch entfernt (App registriert bei jedem Verbinden neu)
+ *  - Registrierung per Added, Werte per Changed + sourceValue
+ *  - additionalSupportedIoTypes erweitert die verbindbaren Typen in der Eingangszuweisung
  */
 class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module(s, "Softdesk") {
     private val stub = InputClientCoroutineStub(s.channel)
 
-    /** Feedback-Werte je Element-ID (ohne Präfix). */
     private val _feedback = MutableStateFlow<Map<String, ObjectData>>(emptyMap())
     val feedback: StateFlow<Map<String, ObjectData>> = _feedback.asStateFlow()
 
     private val _registered = MutableStateFlow(0)
     val registered: StateFlow<Int> = _registered.asStateFlow()
 
-    /** Registrierter Stand je Element: Proxy-ID -> (Desk, Element). */
-    private val active = HashMap<String, Pair<Softdesk, SdElement>>()
-
-    private val prefix get() = "DMXC3Remote.${s.runtimeId}."
-
-    /** Eingang: ID unverändert zu 0.2.0, damit bestehende Verdrahtungen erhalten bleiben. */
-    fun proxyId(e: SdElement) = "$prefix${e.id}"
-
-    /** Ausgang: eigene ID (".out"). Mit identischer ID wie der Eingang tauchte der Ausgang nicht im Baum auf. */
-    fun sinkId(e: SdElement) = "$prefix${e.id}.out"
-
-    private fun elementIdOf(sinkProxyId: String) = sinkProxyId.removePrefix(prefix).removeSuffix(".out")
-
-    /** Vom Server bestätigte Anzahl eigener Eingänge/Ausgänge (GetInputSources/GetInputSinks). */
     private val _serverCounts = MutableStateFlow<Pair<Int, Int>?>(null)
     val serverCounts: StateFlow<Pair<Int, Int>?> = _serverCounts.asStateFlow()
 
-    private fun descriptor(d: Softdesk, e: SdElement, id: String): InputElementDescriptor {
-        val io = IoInformationDescriptor.newBuilder()
-        when (e.type) {
-            SdType.FADER -> io.setAutoGraphIoType(EWellKnownInputType.NUMERIC)
-                .setMin(ObjectData.newBuilder().setDoubleValue(0.0))
-                .setMax(ObjectData.newBuilder().setDoubleValue(1.0))
-            SdType.LABEL -> io.setAutoGraphIoType(EWellKnownInputType.STRING)
-            else -> io.setAutoGraphIoType(EWellKnownInputType.BOOL)
+    private val prefix get() = "DMXC3Remote.${s.runtimeId}."
+    fun proxyId(e: SdElement) = "$prefix${e.id}"
+    fun sinkId(e: SdElement) = "$prefix${e.id}.out"
+    private fun elementIdOf(sinkProxyId: String) = sinkProxyId.removePrefix(prefix).removeSuffix(".out")
+
+    /** Was die Anmeldung beeinflusst. Position/Farbe ändern nichts am Proxy. */
+    private data class Sig(
+        val deskId: String, val deskName: String, val name: String, val type: SdType,
+        val sendIo: SdIo, val fbIo: SdIo, val min: Double, val max: Double
+    ) {
+        /** Typänderung erfordert Ab- und Neuanmeldung. */
+        fun hard(o: Sig) = type != o.type || sendIo != o.sendIo || fbIo != o.fbIo
+    }
+
+    private fun sig(d: Softdesk, e: SdElement) = Sig(d.id, d.name, e.name, e.type, sourceIo(e), e.fbIo, e.min, e.max)
+
+    private val active = HashMap<String, Pair<Sig, Pair<Softdesk, SdElement>>>()
+
+    private fun sourceIo(e: SdElement) = if (e.type == SdType.FADER) SdIo.NUMERIC else e.sendIo
+
+    private fun SdIo.wk() = when (this) {
+        SdIo.BOOL -> EWellKnownInputType.BOOL
+        SdIo.NUMERIC -> EWellKnownInputType.NUMERIC
+        SdIo.STRING -> EWellKnownInputType.STRING
+    }
+
+    private fun descriptor(d: Softdesk, e: SdElement, id: String, io: SdIo): InputElementDescriptor {
+        val info = IoInformationDescriptor.newBuilder()
+            .setAutoGraphIoType(io.wk())
+            .addAllAdditionalSupportedIoTypes(SdIo.entries.filter { it != io }.map { it.wk() })
+        if (io == SdIo.NUMERIC) {
+            info.setMin(ObjectData.newBuilder().setDoubleValue(e.min)).setMax(ObjectData.newBuilder().setDoubleValue(e.max))
         }
         return InputElementDescriptor.newBuilder()
             .setId(id)
@@ -75,13 +82,13 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
                     .setName("Android: ${s.clientName}")
                     .setSubCategory(ParameterCategory.newBuilder().setId("DMXC3Remote.${s.runtimeId}.${d.id}").setName(d.name))
             )
-            .setIoInfo(io)
+            .setIoInfo(info)
             .build()
     }
 
     private fun feedbackType(e: SdElement) = when (e.type) {
         SdType.FADER -> EFeedbackType.COUPLED
-        SdType.BUTTON, SdType.TOGGLE -> EFeedbackType.INDEPENDENT
+        SdType.BUTTON -> EFeedbackType.INDEPENDENT
         else -> EFeedbackType.NONE
     }
 
@@ -93,7 +100,7 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
                 .setChangeType(type)
                 .setSource(
                     InputSourceDescriptor.newBuilder()
-                        .setElement(descriptor(d, e, proxyId(e)))
+                        .setElement(descriptor(d, e, proxyId(e), sourceIo(e)))
                         .setReceivesFeedback(feedbackType(e))
                 )
                 .setUserContextId(s.userContextId)
@@ -111,7 +118,7 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
                 .setChangeType(type)
                 .setSink(
                     InputSinkDescriptor.newBuilder()
-                        .setElement(descriptor(d, e, sinkId(e)))
+                        .setElement(descriptor(d, e, sinkId(e), e.fbIo))
                         .setProvidesFeedback(feedbackType(e))
                 )
                 .setUserContextId(s.userContextId)
@@ -121,7 +128,6 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
         ).requireOk("Ausgang ${e.name} ($type)")
     }
 
-    /** Added, bei Ablehnung Changed (existiert evtl. noch). Fehler werden gemeldet, nicht verschluckt. */
     private suspend fun upsert(name: String, call: suspend (EChangeType) -> Unit, isNew: Boolean) {
         if (!isNew) {
             call(EChangeType.Changed)
@@ -155,40 +161,43 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
         if (e.type.hasSink) runCatching { sinkCall(d, e, EChangeType.Removed) }
     }
 
-    /** Gegenprobe: was der Server tatsächlich als eigene Eingänge/Ausgänge führt. */
     private suspend fun verify() {
-        val src = stub.dl(10).getInputSources(s.getMultiple(), s.headers).sourcesList
-            .count { it.element.id.startsWith(prefix) }
-        val snk = stub.dl(10).getInputSinks(s.getMultiple(), s.headers).sinksList
-            .count { it.element.id.startsWith(prefix) }
+        val src = stub.dl(10).getInputSources(s.getMultiple(), s.headers).sourcesList.count { it.element.id.startsWith(prefix) }
+        val snk = stub.dl(10).getInputSinks(s.getMultiple(), s.headers).sinksList.count { it.element.id.startsWith(prefix) }
         _serverCounts.value = src to snk
     }
 
-    /** Abgleich lokaler Softdesks mit den registrierten Proxies. */
     private suspend fun sync(desks: List<Softdesk>) {
-        val wanted = desks.flatMap { d -> d.elements.map { e -> proxyId(e) to (d to e) } }.toMap()
-        // entfernte oder im Typ geänderte Elemente abmelden
+        val wanted = desks.flatMap { d ->
+            d.elements.filter { it.type.hasSource || it.type.hasSink }.map { e -> proxyId(e) to (d to e) }
+        }.toMap()
         for ((pid, old) in active.toMap()) {
             val now = wanted[pid]
-            if (now == null || now.second.type != old.second.type) {
-                unregister(old.first, old.second)
+            if (now == null || sig(now.first, now.second).hard(old.first)) {
+                unregister(old.second.first, old.second.second)
                 active.remove(pid)
             }
         }
         var errors = 0
+        var changed = false
         for ((pid, de) in wanted) {
+            val newSig = sig(de.first, de.second)
             val old = active[pid]
-            if (old == de) continue
+            if (old != null && old.first == newSig) {
+                active[pid] = newSig to de
+                continue
+            }
             try {
                 register(de.first, de.second, isNew = old == null)
-                active[pid] = de
+                active[pid] = newSig to de
+                changed = true
             } catch (e: UmbraException) {
                 errors++
             }
         }
-        if (errors > 0) s.emit("Softdesk: $errors Element(e) nicht registriert", isError = true)
+        if (errors > 0) s.emit("Softdesk: $errors Element(e) nicht angemeldet", isError = true)
         _registered.value = active.size
-        runCatching { verify() }.onFailure { _serverCounts.value = null }
+        if (changed || errors > 0 || _serverCounts.value == null) runCatching { verify() }.onFailure { _serverCounts.value = null }
     }
 
     override suspend fun load() {
@@ -220,27 +229,53 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
         ).requireOk("Softdesk ${e.name}")
     }
 
-    fun press(e: SdElement, on: Boolean) = act("Softdesk") {
-        sendValue(e, ObjectData.newBuilder().setBoolValue(on).build())
+    /** Taste: sendet je nach Werttyp Bool, Zahl oder Text (konfigurierbare An/Aus-Werte). */
+    fun button(e: SdElement, on: Boolean) = act("Softdesk") {
+        val raw = if (on) e.onValue else e.offValue
+        val v = when (e.sendIo) {
+            SdIo.BOOL -> ObjectData.newBuilder().setBoolValue(on)
+            SdIo.NUMERIC -> ObjectData.newBuilder().setDoubleValue(raw.replace(',', '.').toDoubleOrNull() ?: if (on) 1.0 else 0.0)
+            SdIo.STRING -> ObjectData.newBuilder().setStringValue(raw)
+        }.build()
+        sendValue(e, v)
     }
 
-    fun fader(e: SdElement, v: Double) = s.throttler.submit("sd:${e.id}") {
-        sendValue(e, ObjectData.newBuilder().setDoubleValue(v.coerceIn(0.0, 1.0)).build())
+    /** Fader: Position 0..1 wird auf min..max des Elements abgebildet. */
+    fun fader(e: SdElement, pos: Double) = s.throttler.submit("sd:${e.id}") {
+        val p = pos.coerceIn(0.0, 1.0)
+        sendValue(e, ObjectData.newBuilder().setDoubleValue(e.min + p * (e.max - e.min)).build())
     }
 }
 
-fun ObjectData.asBool(): Boolean = when (valueCase) {
-    ObjectData.ValueCase.BOOLVALUE -> boolValue
-    ObjectData.ValueCase.DOUBLEVALUE -> doubleValue > 0.5
-    ObjectData.ValueCase.FLOATVALUE -> floatValue > 0.5f
-    ObjectData.ValueCase.INTVALUE -> intValue != 0
-    ObjectData.ValueCase.STRINGVALUE -> stringValue.equals("true", true) || stringValue == "1"
-    else -> text().toDoubleOrNull()?.let { it > 0.5 } ?: false
-}
+// ------------------------------------------------------------------ Auswertung der Rückmeldung
 
 fun ObjectData.asDouble(): Double? = when (valueCase) {
     ObjectData.ValueCase.DOUBLEVALUE -> doubleValue
     ObjectData.ValueCase.FLOATVALUE -> floatValue.toDouble()
+    ObjectData.ValueCase.INTVALUE -> intValue.toDouble()
+    ObjectData.ValueCase.LONGVALUE -> longValue.toDouble()
+    ObjectData.ValueCase.UINTVALUE -> uintValue.toDouble()
+    ObjectData.ValueCase.ULONGVALUE -> ulongValue.toDouble()
+    ObjectData.ValueCase.SHORTVALUE -> shortValue.toDouble()
+    ObjectData.ValueCase.SBYTEVALUE -> sbyteValue.toDouble()
+    ObjectData.ValueCase.USHORTVALUE -> ushortValue.toDouble()
+    ObjectData.ValueCase.BYTEVALUE -> byteValue.toDouble()
     ObjectData.ValueCase.BOOLVALUE -> if (boolValue) 1.0 else 0.0
-    else -> text().toDoubleOrNull()
+    else -> text().trim().replace(',', '.').toDoubleOrNull()
+}
+
+/**
+ * "An" nach Regeln: Bool direkt; Text, wenn er in der Liste steht (ohne Groß/Klein);
+ * sonst Zahl über dem Schwellwert. Eigene Werte am Element ersetzen die globale Liste.
+ */
+fun ObjectData.isOn(rules: FeedbackRules, elementOn: String): Boolean {
+    if (valueCase == ObjectData.ValueCase.BOOLVALUE) return boolValue
+    val words = elementOn.split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+        .ifEmpty { rules.onWords.map { it.trim().lowercase() } }
+    val t = text().trim().lowercase()
+    if (t in words) return true
+    val num = asDouble() ?: return false
+    // explizit aufgeführte Zahlen gelten exakt, sonst Schwellwert
+    if (words.any { it.replace(',', '.').toDoubleOrNull() == num }) return true
+    return num > rules.threshold
 }
