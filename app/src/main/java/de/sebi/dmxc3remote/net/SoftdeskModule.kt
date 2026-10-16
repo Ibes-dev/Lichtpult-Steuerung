@@ -206,14 +206,17 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
      * Element mehr gibt (gelöscht ohne Verbindung, Typwechsel, Absturz, alte ID-Schemata).
      * Fremde Proxies (andere Runtime-ID, DMXControl-intern) werden nicht angefasst.
      */
-    suspend fun removeOrphans(): Int {
+    suspend fun removeOrphans(includeOldInstalls: Boolean = false): Int {
         val local = store.desks.value.flatMap { it.elements }
         val validSources = local.filter { it.type.hasSource }.map { proxyId(it) }.toSet()
         val validSinks = local.filter { it.type.hasSink }.map { sinkId(it) }.toSet()
+        // includeOldInstalls: auch Kanäle mit fremder Runtime-ID dieser App (frühere Installation).
+        // Achtung: träfe auch eine zweite, parallel verbundene Installation auf einem anderen Gerät.
+        val mine: (String) -> Boolean = { id -> id.startsWith(prefix) || (includeOldInstalls && id.startsWith("DMXC3Remote.")) }
         val sources = stub.dl(10).getInputSources(s.getMultiple(), s.headers).sourcesList
-            .map { it.element.id }.filter { it.startsWith(prefix) && it !in validSources }
+            .map { it.element.id }.filter { mine(it) && it !in validSources }
         val sinks = stub.dl(10).getInputSinks(s.getMultiple(), s.headers).sinksList
-            .map { it.element.id }.filter { it.startsWith(prefix) && it !in validSinks }
+            .map { it.element.id }.filter { mine(it) && it !in validSinks }
         var removed = 0
         sources.forEach { id ->
             runCatching {
@@ -239,8 +242,8 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
         return removed
     }
 
-    fun cleanup() = act("Aufräumen") {
-        val n = removeOrphans()
+    fun cleanup(includeOldInstalls: Boolean = false) = act("Aufräumen") {
+        val n = removeOrphans(includeOldInstalls)
         s.emit(if (n == 0) "Keine verwaisten Kanäle gefunden" else "$n verwaiste Kanäle entfernt")
     }
 

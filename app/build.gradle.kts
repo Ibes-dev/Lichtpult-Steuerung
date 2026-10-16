@@ -27,6 +27,14 @@ android {
     }
 
     signingConfigs {
+        // Fester Debug-Schlüssel im Repo: sonst erzeugt jeder CI-Lauf einen neuen, Android verweigert
+        // das Update, die App muss deinstalliert werden und verliert Runtime-ID und Softdesks.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         if (keystoreFile != null) {
             create("release") {
                 storeFile = file(keystoreFile)

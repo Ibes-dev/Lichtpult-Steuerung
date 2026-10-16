@@ -750,7 +750,12 @@ private fun DiagDialog(s: UmbraSession, onDismiss: () -> Unit) {
                     "Empfangen: ${c.proxyMsgs} Proxy-Nachrichten, ${c.sinkMsgs} Sink-Nachrichten, ${c.matched} einem Element zugeordnet",
                     style = MaterialTheme.typography.bodySmall
                 )
-                OutlinedButton(onClick = s.softdesk::cleanup) { Text("Verwaiste Kanäle entfernen") }
+                OutlinedButton(onClick = { s.softdesk.cleanup(false) }) { Text("Verwaiste Kanäle entfernen") }
+                OutlinedButton(onClick = { s.softdesk.cleanup(true) }) { Text("Auch Reste früherer Installationen") }
+                Text(
+                    "Die zweite Variante entfernt alle Kanäle dieser App mit anderer Runtime-ID, auch die eines zweiten Geräts mit der App.",
+                    style = MaterialTheme.typography.labelSmall, color = Desk.TextDim
+                )
                 HorizontalDivider()
                 Column(Modifier.height(320.dp).verticalScroll(rememberScrollState())) {
                     if (lines.isEmpty()) Text("Noch nichts empfangen.", color = Desk.TextDim, style = MaterialTheme.typography.bodySmall)
