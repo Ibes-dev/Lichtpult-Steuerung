@@ -171,8 +171,9 @@ private fun Content(dest: Dest, vm: AppViewModel, s: UmbraSession, order: List<D
 @Composable
 private fun MoreScreen(vm: AppViewModel, order: List<Dest>, navigate: (Dest) -> Unit) {
     var editing by remember { mutableStateOf(false) }
+    val wide = isWide() // @Composable: außerhalb des LazyColumn-DSL aufrufen
     LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(if (isWide()) order else order.drop(PHONE_SLOTS)) { d ->
+        items(if (wide) order else order.drop(PHONE_SLOTS)) { d ->
             Row(
                 Modifier
                     .fillMaxWidth()
