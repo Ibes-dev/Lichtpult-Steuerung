@@ -229,7 +229,12 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
 
     private fun applyFeedback(source: String, id: String, v: ObjectData) {
         val eid = elementIdOf(id)
-        log("$source  $id = ${v.text().ifBlank { v.valueCase.name }}" + if (eid == null) "  (nicht zugeordnet)" else "")
+        val detail = when (v.valueCase) {
+            ObjectData.ValueCase.VALUE_NOT_SET ->
+                " [${v.fallbackCase}, ${v.fallbackTypeAQ.ifBlank { v.protobufTypeAQ }.substringBefore(',')}]"
+            else -> " [${v.valueCase}]"
+        }
+        log("$source  $id = ${v.text().ifBlank { "(leer)" }}$detail" + if (eid == null) "  (nicht zugeordnet)" else "")
         if (eid != null) {
             _feedback.update { it + (eid to v) }
             _diagCounts.update { it.copy(matched = it.matched + 1) }
@@ -319,6 +324,7 @@ fun ObjectData.asDouble(): Double? = when (valueCase) {
     ObjectData.ValueCase.USHORTVALUE -> ushortValue.toDouble()
     ObjectData.ValueCase.BYTEVALUE -> byteValue.toDouble()
     ObjectData.ValueCase.BOOLVALUE -> if (boolValue) 1.0 else 0.0
+    ObjectData.ValueCase.VALUE_NOT_SET -> fallback()?.number?.toDouble()
     else -> text().trim().replace(',', '.').toDoubleOrNull()
 }
 

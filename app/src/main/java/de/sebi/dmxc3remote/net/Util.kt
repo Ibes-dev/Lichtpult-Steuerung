@@ -41,7 +41,67 @@ fun ObjectData.text(): String = when (valueCase) {
     ObjectData.ValueCase.SBYTEVALUE -> sbyteValue.toString()
     ObjectData.ValueCase.USHORTVALUE -> ushortValue.toString()
     ObjectData.ValueCase.BYTEVALUE -> byteValue.toString()
-    else -> ""
+    ObjectData.ValueCase.ARRAYVALUE -> arrayValue.valuesList.joinToString(", ") { it.text() }
+    else -> fallback()?.text ?: ""
+}
+
+/** Ergebnis der Auswertung eines nicht-primitiven Werts (Enum, Objekt). */
+data class FallbackValue(val typeName: String, val number: Int?, val text: String)
+
+/** Bekannte DMXC3-Enums, die als Ausgang vorkommen (Namen aus den Protos v3.3.2). */
+private val KNOWN_ENUMS: Map<String, List<String>> = mapOf(
+    "SceneListState" to listOf("Stopped", "Paused", "Running")
+)
+
+/**
+ * Nicht-primitive Werte (z. B. der Cuelist-Status als Enum) kommen nicht als Text, sondern in
+ * fallbackNet (.NET-Serialisierung) bzw. fallbackProtobuf mit Typname in fallbackType_AQ/protobufType_AQ.
+ * UNVERIFIZIERT, heuristisch:
+ *  - fallbackNet (BinaryFormatter): ein Enum steht als Int32 direkt vor dem Abschluss-Byte 0x0B
+ *  - fallbackProtobuf: erstes Varint-Feld
+ * Bekannte Enums werden in ihren Namen übersetzt (z. B. 2 -> "Running"), sonst "Typ=Zahl".
+ */
+fun ObjectData.fallback(): FallbackValue? {
+    if (valueCase != ObjectData.ValueCase.VALUE_NOT_SET) return null
+    val typeAq = fallbackTypeAQ.ifBlank { protobufTypeAQ }
+    val typeName = typeAq.substringBefore(',').substringAfterLast('.').substringAfterLast('+')
+    val bytes = when (fallbackCase) {
+        ObjectData.FallbackCase.FALLBACKNET -> fallbackNet.toByteArray()
+        ObjectData.FallbackCase.FALLBACKPROTOBUF -> fallbackProtobuf.toByteArray()
+        else -> return if (typeName.isBlank()) null else FallbackValue(typeName, null, typeName)
+    }
+    val number: Int? = when (fallbackCase) {
+        ObjectData.FallbackCase.FALLBACKNET ->
+            if (bytes.size >= 5 && bytes.last() == 0x0B.toByte()) {
+                val i = bytes.size - 5
+                (bytes[i].toInt() and 0xFF) or ((bytes[i + 1].toInt() and 0xFF) shl 8) or
+                    ((bytes[i + 2].toInt() and 0xFF) shl 16) or ((bytes[i + 3].toInt() and 0xFF) shl 24)
+            } else null
+        else -> readFirstVarint(bytes)
+    }
+    val known = KNOWN_ENUMS.entries.firstOrNull { typeName.contains(it.key, ignoreCase = true) }?.value
+    val text = when {
+        number != null && known != null && number in known.indices -> known[number]
+        number != null -> "$typeName=$number"
+        else -> "$typeName (${bytes.size} Byte)"
+    }
+    return FallbackValue(typeName, number, text)
+}
+
+/** Erstes Feld einer Protobuf-Nachricht, falls es ein Varint ist (Wire-Type 0). */
+private fun readFirstVarint(b: ByteArray): Int? {
+    if (b.isEmpty() || (b[0].toInt() and 0x07) != 0) return null
+    var result = 0L
+    var shift = 0
+    var i = 1
+    while (i < b.size && shift < 35) {
+        val v = b[i].toInt() and 0xFF
+        result = result or ((v and 0x7F).toLong() shl shift)
+        if (v and 0x80 == 0) return result.toInt()
+        shift += 7
+        i++
+    }
+    return null
 }
 
 fun ConfirmedResponse.requireOk(what: String) {
