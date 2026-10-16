@@ -55,7 +55,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import de.sebi.dmxc3remote.net.PropKind
 import de.sebi.dmxc3remote.net.UmbraSession
+import de.sebi.dmxc3remote.net.boundCase
+import de.sebi.dmxc3remote.net.caption
 import de.sebi.dmxc3remote.net.colorMax
+import de.sebi.dmxc3remote.net.kelvinRange
+import de.sebi.dmxc3remote.net.multiKeys
+import de.sebi.dmxc3remote.net.multiRange
+import de.sebi.dmxc3remote.net.strobeRange
 import de.sebi.dmxc3remote.net.doubleRange
 import de.sebi.dmxc3remote.net.kind
 import de.sebi.dmxc3remote.net.positionRange
@@ -298,8 +304,68 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
                         })
                     }
                 }
+                PropKind.KELVIN -> {
+                    val r = p.kelvinRange()
+                    val v = localValues[key]?.firstOrNull() ?: ((r.start + r.endInclusive) / 2).toFloat()
+                    Text("$label  ${v.toInt()} K", style = MaterialTheme.typography.labelLarge)
+                    Slider(
+                        value = v.coerceIn(r.start.toFloat(), r.endInclusive.toFloat()),
+                        onValueChange = { nv -> localValues[key] = listOf(nv); dm.setKelvin(g.id, p.id, nv.toDouble()) },
+                        valueRange = r.start.toFloat()..r.endInclusive.toFloat()
+                    )
+                }
+                PropKind.STROBE -> {
+                    val r = p.strobeRange()
+                    val v = localValues[key]?.firstOrNull() ?: r.start.toFloat()
+                    val types = p.type.enumValuesList.filter {
+                        it.valueCase == LumosProtobuf.ValueTypes.IEnumObjectData.ValueCase.ENUMSTRING
+                    }
+                    var sel by remember(key) { mutableStateOf(types.firstOrNull()?.enumString) }
+                    Text("$label  ${"%.1f".format(v)}", style = MaterialTheme.typography.labelLarge)
+                    Slider(
+                        value = v.coerceIn(r.start.toFloat(), r.endInclusive.toFloat()),
+                        onValueChange = { nv -> localValues[key] = listOf(nv); dm.setStrobe(g.id, p.id, nv.toDouble(), sel) },
+                        valueRange = r.start.toFloat()..r.endInclusive.toFloat()
+                    )
+                    if (types.isNotEmpty()) EnumChips(types.map { it.caption() }, types.indexOfFirst { it.enumString == sel }) { i ->
+                        sel = types[i].enumString
+                        dm.setStrobe(g.id, p.id, v.toDouble(), sel)
+                    }
+                }
+                PropKind.STRING -> {
+                    var text by remember(key) { mutableStateOf("") }
+                    Text(label, style = MaterialTheme.typography.labelLarge)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(text, { text = it }, singleLine = true, modifier = Modifier.weight(1f))
+                        androidx.compose.material3.TextButton(onClick = { dm.setString(g.id, p.id, text) }) { Text("Setzen") }
+                    }
+                }
+                PropKind.MULTIDOUBLE -> {
+                    val r = p.multiRange()
+                    val v = localValues[key]?.firstOrNull() ?: r.start.toFloat()
+                    Text("$label  ${"%.2f".format(v)}", style = MaterialTheme.typography.labelLarge)
+                    Slider(
+                        value = v.coerceIn(r.start.toFloat(), r.endInclusive.toFloat()),
+                        onValueChange = { nv -> localValues[key] = listOf(nv); dm.setMultiDouble(g.id, p.id, p.multiKeys(), nv.toDouble()) },
+                        valueRange = r.start.toFloat()..r.endInclusive.toFloat()
+                    )
+                    if (p.multiKeys().size > 1) Text("Wirkt auf alle ${p.multiKeys().size} Teilwerte gleich", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+                }
+                PropKind.ENUM -> {
+                    val entries = p.type.enumValuesList
+                    val selIdx = localValues[key]?.firstOrNull()?.toInt() ?: -1
+                    Text(label, style = MaterialTheme.typography.labelLarge)
+                    EnumChips(entries.map { it.caption() }, selIdx, entries.map { e ->
+                        if (e.valueCase == LumosProtobuf.ValueTypes.IEnumObjectData.ValueCase.ENUMCOLOR && e.enumColor.hasColor())
+                            Color(e.enumColor.color.r, e.enumColor.color.g, e.enumColor.color.b) else null
+                    }) { i ->
+                        localValues[key] = listOf(i.toFloat())
+                        dm.setEnum(g.id, p, entries[i])
+                    }
+                }
                 PropKind.UNSUPPORTED -> Text(
-                    "$label: Dieser Eigenschaftstyp (${p.type.name.ifBlank { p.devicePropertyTypeAQ.substringBefore(',').substringAfterLast('.') }}) lässt sich in der App noch nicht einstellen.",
+                    "$label: Typ ${p.type.name.ifBlank { p.devicePropertyTypeAQ.substringBefore(',').substringAfterLast('.') }} " +
+                        "(${p.boundCase()?.name ?: "ohne Grenzen"}) lässt sich in der App noch nicht einstellen.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Desk.TextDim
                 )
@@ -348,7 +414,59 @@ private fun fromServer(v: LumosProtobuf.DeviceServiceTypes.DevicePropertyValue, 
             listOf(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f))
         }
         LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.BOOLVALUE -> listOf(if (v.boolValue.value) 1f else 0f)
+        LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.KELVINVALUE -> listOf(v.kelvinValue.toFloat())
+        LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.STROBE -> listOf(v.strobe.speed.toFloat())
+        LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.LUMOSDOUBLE ->
+            v.lumosDouble.doublevaluesMap.values.firstOrNull()?.let { listOf(it.toFloat()) }
         else -> null
+    }?.let { list ->
+        // Aufzählung: gewählten Eintrag über die Beschriftung wiederfinden
+        if (p.kind() != PropKind.ENUM) list else null
+    } ?: if (p.kind() == PropKind.ENUM) enumIndexOf(v, p)?.let { listOf(it.toFloat()) } else null
+}
+
+private fun enumIndexOf(v: LumosProtobuf.DeviceServiceTypes.DevicePropertyValue, p: DevicePropertyDescriptor): Int? {
+    val captions: List<String> = when (v.valueCase) {
+        LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.COLOR -> v.color.colorwheelMap.values.map { it.caption }
+        LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.GOBO -> v.gobo.gobovaluesMap.values.map { it.caption.ifBlank { it.goboname } }
+        LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.STRINGVALUE -> listOf(v.stringValue)
+        LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.STROBE -> listOf(v.strobe.type.caption)
+        else -> emptyList()
+    }.filter { it.isNotBlank() }
+    if (captions.isEmpty()) return null
+    return p.type.enumValuesList.indexOfFirst { it.caption() in captions }.takeIf { it >= 0 }
+}
+
+/** Auswahlchips für Aufzählungen, optional mit Farbfeld. */
+@Composable
+private fun EnumChips(labels: List<String>, selected: Int, colors: List<Color?> = emptyList(), onPick: (Int) -> Unit) {
+    val cols = if (isWide()) 4 else 3
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        labels.indices.chunked(cols).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                row.forEach { i ->
+                    val sel = i == selected
+                    Row(
+                        Modifier.weight(1f).height(40.dp).clip(RoundedCornerShape(8.dp))
+                            .background(if (sel) Desk.Amber else Desk.Raised)
+                            .clickableNoRipple { onPick(i) }
+                            .padding(horizontal = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        colors.getOrNull(i)?.let { c ->
+                            Box(Modifier.size(14.dp).clip(RoundedCornerShape(3.dp)).background(c))
+                            Box(Modifier.width(6.dp))
+                        }
+                        Text(
+                            labels[i], maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (sel) Color.Black else Desk.Text
+                        )
+                    }
+                }
+                repeat(cols - row.size) { Box(Modifier.weight(1f)) }
+            }
+        }
     }
 }
 

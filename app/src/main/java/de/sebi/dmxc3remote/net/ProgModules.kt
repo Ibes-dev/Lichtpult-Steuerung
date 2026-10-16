@@ -20,7 +20,12 @@ import LumosProtobuf.PresetServiceTypes.InvokePresetRequest
 import LumosProtobuf.PresetServiceTypes.PresetDescriptor
 import LumosProtobuf.ProgrammerServiceTypes.DeleteProgrammerValueRequest
 import LumosProtobuf.ProgrammerServiceTypes.SetProgrammerValueRequest
+import LumosProtobuf.ValueTypes.EnumStringData
+import LumosProtobuf.ValueTypes.IEnumObjectData
 import LumosProtobuf.ValueTypes.LumosBooleanData
+import LumosProtobuf.ValueTypes.LumosDoubleData
+import LumosProtobuf.ValueTypes.LumosGoboData
+import LumosProtobuf.ValueTypes.LumosStrobeData
 import LumosProtobuf.ValueTypes.LumosColorData
 import LumosProtobuf.ValueTypes.LumosPositionData
 import LumosProtobufClient.CommandLineClientGrpcKt.CommandLineClientCoroutineStub
@@ -103,20 +108,71 @@ class NotificationModule(s: UmbraSession) : Module(s, "Meldungen") {
 }
 
 // ============================================================== Gerätegruppen + Programmer
-enum class PropKind { DOUBLE, COLOR, POSITION, BOOL, UNSUPPORTED }
+enum class PropKind { DOUBLE, COLOR, POSITION, BOOL, KELVIN, STROBE, STRING, MULTIDOUBLE, ENUM, UNSUPPORTED }
+
+/** Wertart der Typgrenzen (upper vor lower). */
+fun DevicePropertyDescriptor.boundCase(): DevicePropertyValue.ValueCase? = when {
+    type.hasUpperBound() && type.upperBound.valueCase != DevicePropertyValue.ValueCase.VALUE_NOT_SET -> type.upperBound.valueCase
+    type.hasLowerBound() && type.lowerBound.valueCase != DevicePropertyValue.ValueCase.VALUE_NOT_SET -> type.lowerBound.valueCase
+    else -> null
+}
 
 fun DevicePropertyDescriptor.kind(): PropKind {
-    val b = if (type.hasUpperBound()) type.upperBound else if (type.hasLowerBound()) type.lowerBound else null
-    return when (b?.valueCase) {
+    // Aufzählungen (Farbrad, Gobo, Strobe-Arten, Positionen …) haben Vorrang
+    if (type.enumType && type.enumValuesCount > 0 && boundCase() != DevicePropertyValue.ValueCase.STROBE) return PropKind.ENUM
+    return when (boundCase()) {
         DevicePropertyValue.ValueCase.DOUBLEVALUE -> PropKind.DOUBLE
         DevicePropertyValue.ValueCase.COLOR -> PropKind.COLOR
         DevicePropertyValue.ValueCase.POSITION -> PropKind.POSITION
         DevicePropertyValue.ValueCase.BOOLVALUE -> PropKind.BOOL
+        DevicePropertyValue.ValueCase.KELVINVALUE -> PropKind.KELVIN
+        DevicePropertyValue.ValueCase.STROBE -> PropKind.STROBE
+        DevicePropertyValue.ValueCase.STRINGVALUE -> PropKind.STRING
+        DevicePropertyValue.ValueCase.LUMOSDOUBLE -> PropKind.MULTIDOUBLE
         else -> when {
             type.boolType -> PropKind.BOOL
+            type.enumType && type.enumValuesCount > 0 -> PropKind.ENUM
             else -> PropKind.UNSUPPORTED
         }
     }
+}
+
+/** Beschriftung eines Aufzählungswerts. */
+fun IEnumObjectData.caption(): String = when (valueCase) {
+    IEnumObjectData.ValueCase.ENUMCOLOR -> enumColor.caption.ifBlank { enumColor.id }
+    IEnumObjectData.ValueCase.ENUMSTRING -> enumString.caption.ifBlank { "#${enumString.index}" }
+    IEnumObjectData.ValueCase.GOBO -> gobo.caption.ifBlank { gobo.goboname.ifBlank { if (gobo.open) "Offen" else "Gobo ${gobo.goboindex}" } }
+    IEnumObjectData.ValueCase.LUMOSGOBO -> lumosgobo.gobovaluesMap.values.joinToString { it.caption.ifBlank { it.goboname } }
+    IEnumObjectData.ValueCase.ENUMPOSITION -> "Pan %.0f / Tilt %.0f".format(enumPosition.position.pan, enumPosition.position.tilt)
+    IEnumObjectData.ValueCase.DEVICEEFFECT -> deviceEffect.caption.ifBlank { deviceEffect.type }
+    IEnumObjectData.ValueCase.FALLBACK -> fallback.text()
+    else -> "?"
+}
+
+/** Kelvin-Bereich aus den Typgrenzen, sonst 1800–10000 K. */
+fun DevicePropertyDescriptor.kelvinRange(): ClosedFloatingPointRange<Double> {
+    val lo = if (type.hasLowerBound() && type.lowerBound.valueCase == DevicePropertyValue.ValueCase.KELVINVALUE) type.lowerBound.kelvinValue else 1800.0
+    val hi = if (type.hasUpperBound() && type.upperBound.valueCase == DevicePropertyValue.ValueCase.KELVINVALUE) type.upperBound.kelvinValue else 10000.0
+    return if (hi > lo) lo..hi else 1800.0..10000.0
+}
+
+/** Strobe-Geschwindigkeit aus den Typgrenzen, sonst 0–25 (Einheit laut Gerätedefinition). */
+fun DevicePropertyDescriptor.strobeRange(): ClosedFloatingPointRange<Double> {
+    val lo = if (type.hasLowerBound() && type.lowerBound.hasStrobe()) type.lowerBound.strobe.speed else 0.0
+    val hi = if (type.hasUpperBound() && type.upperBound.hasStrobe()) type.upperBound.strobe.speed else 25.0
+    return if (hi > lo) lo..hi else 0.0..25.0
+}
+
+/** Schlüssel der Einzelwerte bei Mehrfach-Double (z. B. Zellen), aus den Grenzen; sonst 0. */
+fun DevicePropertyDescriptor.multiKeys(): List<Int> {
+    val b = if (type.hasUpperBound() && type.upperBound.hasLumosDouble()) type.upperBound.lumosDouble.doublevaluesMap.keys.toList() else emptyList()
+    return b.ifEmpty { listOf(0) }
+}
+
+fun DevicePropertyDescriptor.multiRange(): ClosedFloatingPointRange<Double> {
+    val lo = if (type.hasLowerBound() && type.lowerBound.hasLumosDouble()) type.lowerBound.lumosDouble.doublevaluesMap.values.minOrNull() else null
+    val hi = if (type.hasUpperBound() && type.upperBound.hasLumosDouble()) type.upperBound.lumosDouble.doublevaluesMap.values.maxOrNull() else null
+    return if (lo != null && hi != null && hi > lo) lo..hi else 0.0..1.0
 }
 
 /** Wertebereich aus PropertyTypeDescriptor (lower/upperBound), Fallback 0..1. */
@@ -399,6 +455,57 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
                 ).build()
             )
         }
+
+    fun setKelvin(groupId: String, propertyId: String, k: Double) = s.throttler.submit("prog:$groupId:$propertyId") {
+        setValue(groupId, propertyId, dpv(groupId, propertyId).setKelvinValue(k).build())
+    }
+
+    /** Strobe: Geschwindigkeit plus optional Art (EnumStringData aus den Aufzählungswerten). */
+    fun setStrobe(groupId: String, propertyId: String, speed: Double, type: EnumStringData?) =
+        s.throttler.submit("prog:$groupId:$propertyId") {
+            val st = LumosStrobeData.newBuilder().setSpeed(speed)
+            if (type != null) st.setType(type)
+            setValue(groupId, propertyId, dpv(groupId, propertyId).setStrobe(st).build())
+        }
+
+    fun setString(groupId: String, propertyId: String, v: String) = act("Programmer") {
+        setValue(groupId, propertyId, dpv(groupId, propertyId).setStringValue(v).build())
+    }
+
+    fun setMultiDouble(groupId: String, propertyId: String, keys: List<Int>, v: Double) =
+        s.throttler.submit("prog:$groupId:$propertyId") {
+            val d = LumosDoubleData.newBuilder()
+            keys.forEach { d.putDoublevalues(it, v) }
+            setValue(groupId, propertyId, dpv(groupId, propertyId).setLumosDouble(d).build())
+        }
+
+    /**
+     * Aufzählungswert setzen. UNVERIFIZIERT, wie DMXControl die Auswahl erwartet; Abbildung:
+     * Farbrad -> color.colorwheel[Rad], Gobo -> gobo.gobovalues[Rad], Position -> position,
+     * Strobe-Art -> strobe.type, sonst Text (Beschriftung) bzw. Rohwert. Ergebnis zeigt das Rücklesen.
+     */
+    fun setEnum(groupId: String, p: DevicePropertyDescriptor, e: IEnumObjectData, strobeSpeed: Double? = null) = act("Programmer") {
+        val b = dpv(groupId, p.id)
+        when (e.valueCase) {
+            IEnumObjectData.ValueCase.ENUMCOLOR -> b.setColor(
+                LumosColorData.newBuilder().putColorwheel(e.enumColor.colorwheel, e.enumColor)
+                    .setColorSet(LumosColorData.EColorSet.COLOR)
+                    .also { c -> if (e.enumColor.hasColor()) c.setColor(e.enumColor.color) }
+            )
+            IEnumObjectData.ValueCase.GOBO -> b.setGobo(LumosGoboData.newBuilder().putGobovalues(e.gobo.gobowheel, e.gobo))
+            IEnumObjectData.ValueCase.LUMOSGOBO -> b.setGobo(e.lumosgobo)
+            IEnumObjectData.ValueCase.ENUMPOSITION -> b.setPosition(e.enumPosition.position)
+            IEnumObjectData.ValueCase.ENUMSTRING ->
+                if (p.boundCase() == DevicePropertyValue.ValueCase.STROBE)
+                    b.setStrobe(LumosStrobeData.newBuilder().setType(e.enumString).setSpeed(strobeSpeed ?: p.strobeRange().endInclusive))
+                else b.setStringValue(e.enumString.caption)
+            IEnumObjectData.ValueCase.DEVICEEFFECT -> b.setStringValue(e.deviceEffect.caption)
+            IEnumObjectData.ValueCase.FALLBACK -> b.setFallback(e.fallback)
+            else -> return@act
+        }
+        setValue(groupId, p.id, b.build())
+        readOne(groupId, p.id)
+    }
 
     fun setBool(groupId: String, propertyId: String, v: Boolean) = act("Programmer") {
         setValue(groupId, propertyId, dpv(groupId, propertyId).setBoolValue(LumosBooleanData.newBuilder().setValue(v).build()).build())
