@@ -23,7 +23,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = buildNumber
-        versionName = "0.2.0.$buildNumber"
+        versionName = "0.3.0.$buildNumber"
     }
 
     signingConfigs {
@@ -53,6 +53,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         resources {

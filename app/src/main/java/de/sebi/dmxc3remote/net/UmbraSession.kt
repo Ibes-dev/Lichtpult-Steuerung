@@ -320,7 +320,8 @@ class UmbraSession(
     }
 
     companion object {
-        const val APP_VERSION = "0.2.0"
+        /** Aus Gradle: versionName inkl. CI-Run-Nummer, z. B. 0.3.0.17 */
+        val APP_VERSION: String = de.sebi.dmxc3remote.BuildConfig.VERSION_NAME
 
         fun buildProgramInfo(identity: ClientIdentity, netId: String): ClientProgramInfo {
             val clientInfo = ClientInfo.newBuilder()
