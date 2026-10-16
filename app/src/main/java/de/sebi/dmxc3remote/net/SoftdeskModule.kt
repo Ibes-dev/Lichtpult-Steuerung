@@ -40,10 +40,32 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
     private val _serverCounts = MutableStateFlow<Pair<Int, Int>?>(null)
     val serverCounts: StateFlow<Pair<Int, Int>?> = _serverCounts.asStateFlow()
 
+    /** Rohdaten der Rückkanäle (ungefiltert), für die Diagnose im Softdesk. */
+    private val _diag = MutableStateFlow<List<String>>(emptyList())
+    val diag: StateFlow<List<String>> = _diag.asStateFlow()
+    private val _diagCounts = MutableStateFlow(DiagCounts())
+    val diagCounts: StateFlow<DiagCounts> = _diagCounts.asStateFlow()
+
+    data class DiagCounts(val proxyMsgs: Int = 0, val sinkMsgs: Int = 0, val matched: Int = 0)
+
+    private fun log(line: String) {
+        val t = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.GERMANY).format(java.util.Date())
+        _diag.update { (listOf("$t  $line") + it).take(60) }
+    }
+
     private val prefix get() = "DMXC3Remote.${s.runtimeId}."
     fun proxyId(e: SdElement) = "$prefix${e.id}"
     fun sinkId(e: SdElement) = "$prefix${e.id}.out"
-    private fun elementIdOf(sinkProxyId: String) = sinkProxyId.removePrefix(prefix).removeSuffix(".out")
+    /**
+     * Zuordnung einer empfangenen Sink-ID zum Element. Tolerant, weil das ID-Format im
+     * Rückkanal nicht dokumentiert ist: exakte Proxy-ID, mit/ohne ".out", oder nur die Element-ID.
+     */
+    private fun elementIdOf(id: String): String? {
+        val known = active.values.map { it.second.second.id }.toSet()
+        val cand = id.removePrefix(prefix).removeSuffix(".out")
+        if (cand in known) return cand
+        return known.firstOrNull { id.endsWith(it) || id.endsWith("$it.out") || id.contains(it) }
+    }
 
     /** Was die Anmeldung beeinflusst. Position/Farbe ändern nichts am Proxy. */
     private data class Sig(
@@ -205,13 +227,49 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
         sync(store.desks.value)
     }
 
+    private fun applyFeedback(source: String, id: String, v: ObjectData) {
+        val eid = elementIdOf(id)
+        log("$source  $id = ${v.text().ifBlank { v.valueCase.name }}" + if (eid == null) "  (nicht zugeordnet)" else "")
+        if (eid != null) {
+            _feedback.update { it + (eid to v) }
+            _diagCounts.update { it.copy(matched = it.matched + 1) }
+        }
+    }
+
     override suspend fun stream() = coroutineScope {
         launch { store.desks.collect { sync(it) } }
-        stub.receiveSinkProxyChanges(s.getRequest(), s.headers).collect { m ->
-            val upd = m.changedValuesList
-                .filter { it.inputSinkId.startsWith(prefix) }
-                .associate { elementIdOf(it.inputSinkId) to it.newValue }
-            if (upd.isNotEmpty()) _feedback.update { it + upd }
+        // Kanal 1: Änderungen an Sinks (enthält newValue)
+        launch {
+            try {
+                log("Sink-Änderungen: Stream geöffnet")
+                stub.receiveInputSinkChanges(s.getRequest(), s.headers).collect { m ->
+                    _diagCounts.update { it.copy(sinkMsgs = it.sinkMsgs + 1) }
+                    if (m.hasNewValue()) applyFeedback("Sink", m.inputSinkId, m.newValue)
+                }
+                log("Sink-Änderungen: Stream beendet")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("Sink-Änderungen: ${e.describe()}")
+            }
+        }
+        // Kanal 2: Proxy-Werte. UNVERIFIZIERT: requestId = runtimeId, falls der Server darüber zuordnet.
+        log("Proxy-Werte: Stream geöffnet")
+        val req = LumosProtobuf.CommonTypes.GetRequest.newBuilder()
+            .setRequestId(s.runtimeId)
+            .setUserContextId(s.userContextId)
+            .build()
+        try {
+            stub.receiveSinkProxyChanges(req, s.headers).collect { m ->
+                _diagCounts.update { it.copy(proxyMsgs = it.proxyMsgs + 1) }
+                m.changedValuesList.forEach { applyFeedback("Proxy", it.inputSinkId, it.newValue) }
+            }
+            log("Proxy-Werte: Stream beendet")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("Proxy-Werte: ${e.describe()}")
+            throw e
         }
     }
 

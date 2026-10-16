@@ -102,6 +102,7 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore) {
     var addAt by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var deskDialog by remember { mutableStateOf(false) }
     var rulesDialog by remember { mutableStateOf(false) }
+    var diagDialog by remember { mutableStateOf(false) }
     val desk = desks.firstOrNull { it.id == deskId } ?: desks.firstOrNull()
 
     Column(Modifier.fillMaxSize()) {
@@ -140,6 +141,7 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore) {
             ) {
                 if (desk != null) OutlinedButton(onClick = { deskDialog = true }) { Text("Raster") }
                 OutlinedButton(onClick = { rulesDialog = true }) { Text("Rückmeldung") }
+                OutlinedButton(onClick = { diagDialog = true }) { Text("Diagnose") }
                 Text(
                     server?.let { "DMXControl: ${it.first} Eingänge, ${it.second} Ausgänge" } ?: "$registered angemeldet",
                     style = MaterialTheme.typography.labelSmall,
@@ -195,6 +197,7 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore) {
             store.deleteDesk(desk.id); deskId = null; deskDialog = false
         }) { store.updateDesk(it); deskDialog = false }
     }
+    if (diagDialog) DiagDialog(s) { diagDialog = false }
     if (rulesDialog) {
         RulesDialog(rules, onDismiss = { rulesDialog = false }) { store.setRules(it); rulesDialog = false }
     }
@@ -725,5 +728,36 @@ private fun RulesDialog(rules: FeedbackRules, onDismiss: () -> Unit, onSave: (Fe
             }) { Text("Speichern") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } }
+    )
+}
+
+@Composable
+private fun DiagDialog(s: UmbraSession, onDismiss: () -> Unit) {
+    val lines by s.softdesk.diag.collectAsStateWithLifecycle()
+    val c by s.softdesk.diagCounts.collectAsStateWithLifecycle()
+    val server by s.softdesk.serverCounts.collectAsStateWithLifecycle()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Diagnose Rückkanal") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    server?.let { "In DMXControl angemeldet: ${it.first} Eingänge, ${it.second} Ausgänge" } ?: "Anmeldung nicht bestätigt",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    "Empfangen: ${c.proxyMsgs} Proxy-Nachrichten, ${c.sinkMsgs} Sink-Nachrichten, ${c.matched} einem Element zugeordnet",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                HorizontalDivider()
+                Column(Modifier.height(320.dp).verticalScroll(rememberScrollState())) {
+                    if (lines.isEmpty()) Text("Noch nichts empfangen.", color = Desk.TextDim, style = MaterialTheme.typography.bodySmall)
+                    lines.forEach { l ->
+                        Text(l, style = MaterialTheme.typography.labelSmall.merge(Numeric), color = if ("nicht zugeordnet" in l) Desk.Amber else Desk.Text)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Schließen") } }
     )
 }
