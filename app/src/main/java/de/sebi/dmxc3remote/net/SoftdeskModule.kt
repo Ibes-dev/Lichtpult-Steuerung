@@ -61,10 +61,13 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
      * Rückkanal nicht dokumentiert ist: exakte Proxy-ID, mit/ohne ".out", oder nur die Element-ID.
      */
     private fun elementIdOf(id: String): String? {
-        val known = active.values.map { it.second.second.id }.toSet()
+        // Gegen alle lokal definierten Elemente prüfen, nicht nur gegen erfolgreich angemeldete:
+        // ein Ausgang aus einer früheren Sitzung bleibt auf dem Server bestehen und liefert weiter Werte.
+        val known = store.desks.value.flatMap { d -> d.elements.map { it.id } }.toSet()
         val cand = id.removePrefix(prefix).removeSuffix(".out")
         if (cand in known) return cand
-        return known.firstOrNull { id.endsWith(it) || id.endsWith("$it.out") || id.contains(it) }
+        if (!id.startsWith("DMXC3Remote.")) return null
+        return known.firstOrNull { id.endsWith(".$it.out") || id.endsWith(".$it") }
     }
 
     /** Was die Anmeldung beeinflusst. Position/Farbe ändern nichts am Proxy. */
