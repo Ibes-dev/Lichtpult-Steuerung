@@ -736,6 +736,7 @@ private fun DiagDialog(s: UmbraSession, onDismiss: () -> Unit) {
     val lines by s.softdesk.diag.collectAsStateWithLifecycle()
     val c by s.softdesk.diagCounts.collectAsStateWithLifecycle()
     val server by s.softdesk.serverCounts.collectAsStateWithLifecycle()
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Diagnose Rückkanal") },
@@ -749,6 +750,7 @@ private fun DiagDialog(s: UmbraSession, onDismiss: () -> Unit) {
                     "Empfangen: ${c.proxyMsgs} Proxy-Nachrichten, ${c.sinkMsgs} Sink-Nachrichten, ${c.matched} einem Element zugeordnet",
                     style = MaterialTheme.typography.bodySmall
                 )
+                OutlinedButton(onClick = s.softdesk::cleanup) { Text("Verwaiste Kanäle entfernen") }
                 HorizontalDivider()
                 Column(Modifier.height(320.dp).verticalScroll(rememberScrollState())) {
                     if (lines.isEmpty()) Text("Noch nichts empfangen.", color = Desk.TextDim, style = MaterialTheme.typography.bodySmall)
@@ -758,6 +760,12 @@ private fun DiagDialog(s: UmbraSession, onDismiss: () -> Unit) {
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Schließen") } }
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Schließen") } },
+        dismissButton = {
+            TextButton(onClick = {
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(s.softdesk.diagReport()))
+                s.emit("Diagnose in die Zwischenablage kopiert")
+            }) { Text("Kopieren") }
+        }
     )
 }

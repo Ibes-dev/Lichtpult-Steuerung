@@ -54,6 +54,21 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
     }
 
     private val prefix get() = "DMXC3Remote.${s.runtimeId}."
+
+    /** Kopierbarer Diagnosebericht inkl. Version, Runtime-ID und lokaler Element-IDs. */
+    fun diagReport(): String = buildString {
+        appendLine("DMXC3 Remote ${UmbraSession.APP_VERSION}")
+        appendLine("Runtime-ID: ${s.runtimeId}")
+        appendLine("Server: ${_serverCounts.value?.let { "${it.first} Eingänge, ${it.second} Ausgänge" } ?: "unbestätigt"}")
+        val c = _diagCounts.value
+        appendLine("Empfangen: ${c.proxyMsgs} Proxy, ${c.sinkMsgs} Sink, ${c.matched} zugeordnet")
+        appendLine("Lokale Elemente:")
+        store.desks.value.forEach { d ->
+            d.elements.forEach { e -> appendLine("  ${d.name} / ${e.name} [${e.type}] id=${e.id} angemeldet=${proxyId(e) in active}") }
+        }
+        appendLine("Protokoll:")
+        _diag.value.forEach { appendLine("  $it") }
+    }
     fun proxyId(e: SdElement) = "$prefix${e.id}"
     fun sinkId(e: SdElement) = "$prefix${e.id}.out"
     /**
@@ -186,6 +201,49 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
         if (e.type.hasSink) runCatching { sinkCall(d, e, EChangeType.Removed) }
     }
 
+    /**
+     * Entfernt Ein-/Ausgänge dieser App, die DMXControl noch führt, zu denen es aber kein lokales
+     * Element mehr gibt (gelöscht ohne Verbindung, Typwechsel, Absturz, alte ID-Schemata).
+     * Fremde Proxies (andere Runtime-ID, DMXControl-intern) werden nicht angefasst.
+     */
+    suspend fun removeOrphans(): Int {
+        val local = store.desks.value.flatMap { it.elements }
+        val validSources = local.filter { it.type.hasSource }.map { proxyId(it) }.toSet()
+        val validSinks = local.filter { it.type.hasSink }.map { sinkId(it) }.toSet()
+        val sources = stub.dl(10).getInputSources(s.getMultiple(), s.headers).sourcesList
+            .map { it.element.id }.filter { it.startsWith(prefix) && it !in validSources }
+        val sinks = stub.dl(10).getInputSinks(s.getMultiple(), s.headers).sinksList
+            .map { it.element.id }.filter { it.startsWith(prefix) && it !in validSinks }
+        var removed = 0
+        sources.forEach { id ->
+            runCatching {
+                stub.dl(5).createOrUpdateOrDeleteSourceProxy(
+                    InputSourceProxyRequest.newBuilder().setRequestId(s.nextRequestId()).setInputSourceId(id)
+                        .setChangeType(EChangeType.Removed).setUserContextId(s.userContextId).setRuntimeId(s.runtimeId).build(),
+                    s.headers
+                ).requireOk("Eingang $id entfernen")
+            }.onSuccess { removed++; log("Verwaist entfernt: Eingang $id") }
+                .onFailure { log("Entfernen fehlgeschlagen: Eingang $id: ${it.message}") }
+        }
+        sinks.forEach { id ->
+            runCatching {
+                stub.dl(5).createOrUpdateOrDeleteSinkProxy(
+                    InputSinkProxyRequest.newBuilder().setRequestId(s.nextRequestId()).setInputSinkId(id)
+                        .setChangeType(EChangeType.Removed).setUserContextId(s.userContextId).setRuntimeId(s.runtimeId).build(),
+                    s.headers
+                ).requireOk("Ausgang $id entfernen")
+            }.onSuccess { removed++; log("Verwaist entfernt: Ausgang $id") }
+                .onFailure { log("Entfernen fehlgeschlagen: Ausgang $id: ${it.message}") }
+        }
+        runCatching { verify() }
+        return removed
+    }
+
+    fun cleanup() = act("Aufräumen") {
+        val n = removeOrphans()
+        s.emit(if (n == 0) "Keine verwaisten Kanäle gefunden" else "$n verwaiste Kanäle entfernt")
+    }
+
     private suspend fun verify() {
         val src = stub.dl(10).getInputSources(s.getMultiple(), s.headers).sourcesList.count { it.element.id.startsWith(prefix) }
         val snk = stub.dl(10).getInputSinks(s.getMultiple(), s.headers).sinksList.count { it.element.id.startsWith(prefix) }
@@ -228,6 +286,11 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
     override suspend fun load() {
         active.clear()
         sync(store.desks.value)
+        // Reste früherer Sitzungen automatisch entfernen. Schutz: ohne lokale Elemente (z. B. leerer
+        // oder unlesbarer Speicher) nichts löschen, sonst gingen alle Verdrahtungen verloren.
+        if (store.desks.value.any { it.elements.isNotEmpty() }) {
+            runCatching { removeOrphans() }.onFailure { log("Aufräumen: ${it.message}") }
+        }
     }
 
     private fun applyFeedback(source: String, id: String, v: ObjectData) {
@@ -237,7 +300,7 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
                 " [${v.fallbackCase}, ${v.fallbackTypeAQ.ifBlank { v.protobufTypeAQ }.substringBefore(',')}]"
             else -> " [${v.valueCase}]"
         }
-        log("$source  $id = ${v.text().ifBlank { "(leer)" }}$detail" + if (eid == null) "  (nicht zugeordnet)" else "")
+        log("$source  $id = ${v.text().ifBlank { "(leer)" }}$detail" + if (eid == null) "  (nicht zugeordnet)" else "  -> $eid")
         if (eid != null) {
             _feedback.update { it + (eid to v) }
             _diagCounts.update { it.copy(matched = it.matched + 1) }
