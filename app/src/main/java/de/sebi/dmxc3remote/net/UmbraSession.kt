@@ -114,6 +114,7 @@ class UmbraSession(
         .maxInboundMessageSize(UmbraConstants.MAX_MESSAGE_SIZE)
         .keepAliveTime(20, TimeUnit.SECONDS)
         .keepAliveWithoutCalls(true)
+        .intercept(Diag.interceptor)
         .build()
 
     /**
@@ -164,10 +165,11 @@ class UmbraSession(
     val dmx = DmxModule(this)
     val system = SystemModule(this)
     val softdesk = SoftdeskModule(this, softdeskStore)
+    val stage = StageModule(this)
 
     val modules: List<Module> = listOf(
         executors, masters, macros, mainSwitches, globals, cuelists, beat, audio,
-        timecodes, commandLine, notifications, devices, presets, project, dmx, system, softdesk
+        timecodes, commandLine, notifications, devices, presets, project, dmx, system, softdesk, stage
     )
 
     fun nextRequestId() = requestCounter.incrementAndGet().toString()
@@ -281,12 +283,16 @@ class UmbraSession(
     /** Ping-Pong wie UmbraConnectionClient.OpenPing: eigener Ping alle 5 s, fremde beantworten. */
     private suspend fun pingLoop(): Nothing = coroutineScope {
         val outgoing = Channel<PingPong>(Channel.UNLIMITED)
+        val sentAt = java.util.concurrent.ConcurrentHashMap<Long, Long>()
         val sender = launch {
             var counter = 0L
             while (isActive) {
+                counter++
+                sentAt[counter] = System.nanoTime()
+                if (sentAt.size > 20) sentAt.keys.sorted().take(sentAt.size - 20).forEach { sentAt.remove(it) }
                 outgoing.send(
                     PingPong.newBuilder()
-                        .setRequestCounter(++counter)
+                        .setRequestCounter(counter)
                         .setClientname(identity.clientName)
                         .build()
                 )
@@ -296,6 +302,9 @@ class UmbraSession(
         connectedStub.ping(outgoing.receiveAsFlow(), headers).collect { pong ->
             if (pong.clientname != identity.clientName) {
                 outgoing.send(pong.toBuilder().setResponder(identity.clientName).build())
+            } else {
+                // Antwort auf eigenen Ping -> Laufzeit
+                sentAt.remove(pong.requestCounter)?.let { t0 -> Diag.rtt((System.nanoTime() - t0) / 1_000_000) }
             }
         }
         sender.cancel()

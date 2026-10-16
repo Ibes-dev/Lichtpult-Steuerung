@@ -13,6 +13,8 @@ import LumosProtobuf.Master.MasterServiceTypes.MasterDescriptor
 import LumosProtobuf.Timecode.TimecodeServiceCRUDTypes.ETimecodeAction
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,7 +39,9 @@ import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalIconButton
@@ -64,6 +68,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -181,8 +186,10 @@ private fun ExecutorStrip(ex: ExecutorDescriptor, w: androidx.compose.ui.unit.Dp
 
 // ============================================================== Cuelists
 @Composable
-fun CuelistScreen(s: UmbraSession) {
+fun CuelistScreen(s: UmbraSession, vm: AppViewModel) {
     val m = s.cuelists
+    val goId by vm.goCuelistId.collectAsStateWithLifecycle()
+    var detailId by rememberSaveable { mutableStateOf<String?>(null) }
     val lists by m.items.collectAsStateWithLifecycle()
     val groups by m.groups.collectAsStateWithLifecycle()
     val err by m.error.collectAsStateWithLifecycle()
@@ -218,10 +225,65 @@ fun CuelistScreen(s: UmbraSession) {
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(visible) { cl -> CuelistCard(cl, s) }
+                items(visible) { cl ->
+                    CuelistCard(
+                        cl, s,
+                        isGo = goId == cl.id,
+                        onGoTarget = { vm.setGoCuelist(if (goId == cl.id) "" else cl.id) },
+                        onDetails = { detailId = cl.id }
+                    )
+                }
             }
         }
     }
+    val det = detailId?.let { lists[it] }
+    if (det != null) CuelistDetail(det, s) { detailId = null }
+}
+
+@Composable
+private fun CuelistDetail(cl: CuelistDescriptor, s: UmbraSession, onClose: () -> Unit) {
+    val progress by s.cuelists.progress.collectAsStateWithLifecycle()
+    val p = progress[cl.id]
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(cl.name.ifBlank { "Cuelist ${cl.number}" }) },
+        text = {
+            androidx.compose.foundation.lazy.LazyColumn(Modifier.height(440.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                items(cl.cuesList.sortedBy { it.cueIndex }) { c ->
+                    val idx = c.cueIndex
+                    val st = p?.cueProgressStateMap?.get(idx)
+                    val current = idx == cl.index
+                    val next = idx == cl.nextIndex
+                    val nr = if (c.hasCueNumber() && c.cueNumber.numberCount > 0) c.cueNumber.numberList.joinToString(".") else "${idx + 1}"
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (current) Desk.Green.copy(alpha = 0.18f) else Desk.Raised)
+                            .clickable { s.cuelists.goTo(cl.id, idx) }
+                            .padding(10.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(nr, style = MaterialTheme.typography.labelLarge.merge(Numeric), modifier = Modifier.width(44.dp))
+                            Text(c.name.ifBlank { "Cue $nr" }, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (current) StatusPill("aktiv", Desk.Green) else if (next) StatusPill("nächster", Desk.Amber)
+                        }
+                        if (st != null && st.progress > 0.0 && st.progress < 1.0) {
+                            androidx.compose.material3.LinearProgressIndicator(
+                                progress = { st.progress.toFloat().coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                                color = Desk.Green
+                            )
+                            val left = maxOf(st.fadeTimeLeft, st.delayTimeLeft)
+                            if (left > 0) Text("noch ${fmtTime(left)}", style = MaterialTheme.typography.labelSmall.merge(Numeric), color = Desk.TextDim)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onClose) { Text("Schließen") } },
+        dismissButton = { Text("Antippen springt zum Cue", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim) }
+    )
 }
 
 private fun CuelistDescriptor.cueName(index: Int): String {
@@ -232,7 +294,7 @@ private fun CuelistDescriptor.cueName(index: Int): String {
 }
 
 @Composable
-private fun CuelistCard(cl: CuelistDescriptor, s: UmbraSession) {
+private fun CuelistCard(cl: CuelistDescriptor, s: UmbraSession, isGo: Boolean, onGoTarget: () -> Unit, onDetails: () -> Unit) {
     val m = s.cuelists
     var local by remember(cl.id) { mutableFloatStateOf(cl.intensity.toFloat()) }
     var dragging by remember(cl.id) { mutableStateOf(false) }
@@ -246,11 +308,18 @@ private fun CuelistCard(cl: CuelistDescriptor, s: UmbraSession) {
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.weight(1f).clickable(onClick = onDetails)) {
                 Text(cl.name.ifBlank { "Cuelist ${cl.number}" }, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("Nr. ${cl.number}", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
+                Text("Nr. ${cl.number}, Cues anzeigen", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
             }
             StatusPill(stateText, stateColor)
+            androidx.compose.material3.IconButton(onClick = onGoTarget) {
+                Icon(
+                    if (isGo) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                    contentDescription = "Go-Ziel für externe Tasten",
+                    tint = if (isGo) Desk.Amber else Desk.TextDim
+                )
+            }
         }
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Desk.Surface).padding(10.dp)) {
             Text("Aktuell", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
@@ -411,7 +480,7 @@ private fun MacroCard(mc: MacroDescriptor, s: UmbraSession) {
 
 // ============================================================== Beat & Medien
 @Composable
-fun MediaScreen(s: UmbraSession) {
+fun MediaScreen(s: UmbraSession, vm: AppViewModel) {
     val wide = isWide()
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(10.dp),
@@ -419,14 +488,18 @@ fun MediaScreen(s: UmbraSession) {
     ) {
         if (wide) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(Modifier.weight(1f)) { BeatSection(s) }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    BeatSection(s, vm)
+                    MicSection(s, vm)
+                }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     TimecodeSection(s)
                     AudioSection(s)
                 }
             }
         } else {
-            BeatSection(s)
+            BeatSection(s, vm)
+            MicSection(s, vm)
             TimecodeSection(s)
             AudioSection(s)
         }
@@ -434,14 +507,41 @@ fun MediaScreen(s: UmbraSession) {
 }
 
 @Composable
-private fun BeatSection(s: UmbraSession) {
+private fun BeatSection(s: UmbraSession, vm: AppViewModel) {
     val m = s.beat
     val interval by m.intervalMs.collectAsStateWithLifecycle()
     val enabled by m.enabled.collectAsStateWithLifecycle()
     val factor by m.factor.collectAsStateWithLifecycle()
     val beat by m.beat.collectAsStateWithLifecycle()
+    val model by m.localModel.collectAsStateWithLifecycle()
     val err by m.error.collectAsStateWithLifecycle()
+    val tapMode by vm.beatTapMode.collectAsStateWithLifecycle()
+    val timeBase by vm.beatTimeBase.collectAsStateWithLifecycle()
+    val rounding by vm.beatRounding.collectAsStateWithLifecycle()
+    val haptic by vm.beatHaptic.collectAsStateWithLifecycle()
+    val micAuto by vm.micAutoApply.collectAsStateWithLifecycle()
     var bpmText by remember { mutableStateOf("") }
+    val view = androidx.compose.ui.platform.LocalView.current
+
+    // Haptischer Puls auf jedem Server-Beat
+    LaunchedEffect(beat, haptic) {
+        if (haptic && beat > 0) view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+    }
+    // Lokales Metronom aus dem App-Tempomodell (Taps/Mikrofon): blinkt zum vorhergesagten Beat
+    var metro by remember { mutableStateOf(false) }
+    LaunchedEffect(model) {
+        val md = model ?: return@LaunchedEffect
+        if (md.periodMs <= 0) return@LaunchedEffect
+        while (true) {
+            val now = System.currentTimeMillis()
+            val since = ((now - md.anchorMs) % md.periodMs.toLong() + md.periodMs.toLong()) % md.periodMs.toLong()
+            kotlinx.coroutines.delay((md.periodMs - since).toLong().coerceAtLeast(1))
+            metro = true
+            kotlinx.coroutines.delay(80)
+            metro = false
+        }
+    }
+
     Section("Takt", error = err, actions = {
         Text("Manuell", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim, modifier = Modifier.padding(end = 8.dp))
         Switch(checked = enabled, onCheckedChange = m::setEnabled)
@@ -453,20 +553,52 @@ private fun BeatSection(s: UmbraSession) {
             )
             Text(" BPM", style = MaterialTheme.typography.titleMedium, color = Desk.TextDim, modifier = Modifier.padding(bottom = 6.dp))
             Box(Modifier.weight(1f))
-            // vier Takt-LEDs, die aktuelle leuchtet
-            (0 until 4).forEach { i ->
-                Box(
-                    Modifier.padding(start = 6.dp, bottom = 10.dp).size(12.dp).clip(RoundedCornerShape(3.dp))
-                        .background(if ((beat % 4L).toInt() == i) Desk.Cyan else Desk.Raised)
-                )
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Row {
+                    (0 until 4).forEach { i ->
+                        Box(
+                            Modifier.padding(start = 6.dp).size(12.dp).clip(RoundedCornerShape(3.dp))
+                                .background(if ((beat % 4L).toInt() == i) Desk.Cyan else Desk.Raised)
+                        )
+                    }
+                }
+                Text("DMXControl", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(start = 12.dp)) {
+                Box(Modifier.size(18.dp).clip(RoundedCornerShape(9.dp)).background(if (metro) Desk.Amber else Desk.Raised))
+                Text("App", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
             }
         }
+        // Tap auf Finger-DOWN mit Ereigniszeit (nicht beim Loslassen)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
-                Modifier.weight(2f).height(72.dp).clip(RoundedCornerShape(10.dp)).background(Desk.Cyan).clickable { m.tap() },
+                Modifier.weight(2f).height(80.dp).clip(RoundedCornerShape(10.dp)).background(Desk.Cyan)
+                    .pointerInput(tapMode, timeBase, rounding, micAuto) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown()
+                            val ageMs = android.os.SystemClock.uptimeMillis() - down.uptimeMillis
+                            val unix = System.currentTimeMillis() - ageMs
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                            if (micAuto) m.syncAt(unix, timeBase)           // Hybrid: Mikro = Tempo, Tap = Phase
+                            else m.tap(unix, tapMode, timeBase, rounding)
+                        }
+                    },
                 contentAlignment = Alignment.Center
-            ) { Text("Tippen im Takt", style = MaterialTheme.typography.titleMedium, color = Color.Black) }
-            OutlinedButton(onClick = m::sync, modifier = Modifier.weight(1f).height(72.dp)) { Text("Sync") }
+            ) {
+                Text(if (micAuto) "Tippen = Phase" else "Tippen im Takt", style = MaterialTheme.typography.titleMedium, color = Color.Black)
+            }
+            OutlinedButton(onClick = { m.syncAt(System.currentTimeMillis(), timeBase) }, modifier = Modifier.weight(1f).height(80.dp)) { Text("Sync") }
+        }
+        Text("Korrektur", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(onClick = { m.nudgeBpm(-1.0) }, modifier = Modifier.weight(1f)) { Text("−1") }
+            OutlinedButton(onClick = { m.nudgeBpm(1.0) }, modifier = Modifier.weight(1f)) { Text("+1") }
+            OutlinedButton(onClick = { m.multiply(0.5) }, modifier = Modifier.weight(1f)) { Text("÷2") }
+            OutlinedButton(onClick = { m.multiply(2.0) }, modifier = Modifier.weight(1f)) { Text("×2") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(onClick = { m.nudgePhase(-10, timeBase) }, modifier = Modifier.weight(1f)) { Text("Phase −10 ms") }
+            OutlinedButton(onClick = { m.nudgePhase(10, timeBase) }, modifier = Modifier.weight(1f)) { Text("Phase +10 ms") }
         }
         Text("Faktor", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -486,6 +618,94 @@ private fun BeatSection(s: UmbraSession) {
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
             )
             Button(onClick = { bpmText.replace(',', '.').toDoubleOrNull()?.let(m::setBpm) }) { Text("Übernehmen") }
+        }
+        Text("Einstellungen", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(selected = tapMode == 0, onClick = { vm.setBeatTapMode(0) }, label = { Text("App rechnet") })
+            FilterChip(selected = tapMode == 1, onClick = { vm.setBeatTapMode(1) }, label = { Text("DMXControl lernt") })
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(selected = rounding == 0, onClick = { vm.setBeatRounding(0) }, label = { Text("Exakt") })
+            FilterChip(selected = rounding == 2, onClick = { vm.setBeatRounding(2) }, label = { Text("½ BPM") })
+            FilterChip(selected = rounding == 1, onClick = { vm.setBeatRounding(1) }, label = { Text("Ganze BPM") })
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(selected = timeBase == 0, onClick = { vm.setBeatTimeBase(0) }, label = { Text("Zeit: Unix-ms") })
+            FilterChip(selected = timeBase == 1, onClick = { vm.setBeatTimeBase(1) }, label = { Text("Zeit: .NET-Ticks") })
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Vibration auf jedem Beat", modifier = Modifier.weight(1f))
+            Switch(checked = haptic, onCheckedChange = vm::setBeatHaptic)
+        }
+        Text(
+            "Zeitbasis gilt für Sync, Phase und \"DMXControl lernt\". Welche der Server erwartet, ist ungeprüft: unter Diagnose testen.",
+            style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+        )
+    }
+}
+
+@Composable
+private fun MicSection(s: UmbraSession, vm: AppViewModel) {
+    val mic = vm.mic
+    val running by mic.running.collectAsStateWithLifecycle()
+    val bpm by mic.bpm.collectAsStateWithLifecycle()
+    val conf by mic.confidence.collectAsStateWithLifecycle()
+    val level by mic.level.collectAsStateWithLifecycle()
+    val err by mic.error.collectAsStateWithLifecycle()
+    val auto by vm.micAutoApply.collectAsStateWithLifecycle()
+    val rounding by vm.beatRounding.collectAsStateWithLifecycle()
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val permission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted -> if (granted) mic.start(scope) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { mic.stop() } }
+
+    Section("Tempo aus dem Mikrofon", error = err, actions = {
+        Switch(checked = running, onCheckedChange = { on ->
+            if (!on) mic.stop()
+            else if (androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.RECORD_AUDIO) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) mic.start(scope)
+            else permission.launch(android.Manifest.permission.RECORD_AUDIO)
+        })
+    }) {
+        Text(
+            "Erkennt das Tempo am Bass. Schätzung, kein Ersatz für die Audioanalyse am PC: Hall, Lautstärkeregelung und Handy in der Tasche verfälschen sie.",
+            style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+        )
+        if (running) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(bpm?.let { "%.1f".format(it) } ?: "…", style = MaterialTheme.typography.headlineMedium.merge(Numeric))
+                Text(" BPM", color = Desk.TextDim, modifier = Modifier.padding(bottom = 4.dp))
+                Box(Modifier.weight(1f))
+                StatusPill(
+                    when {
+                        conf >= 0.5 -> "sicher"
+                        conf >= 0.3 -> "mittel"
+                        else -> "unsicher"
+                    },
+                    when {
+                        conf >= 0.5 -> Desk.Green
+                        conf >= 0.3 -> Desk.Amber
+                        else -> Desk.Red
+                    }
+                )
+            }
+            androidx.compose.material3.LinearProgressIndicator(
+                progress = { level.toFloat().coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+                color = if (level > 0.9) Desk.Red else Desk.Cyan
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(enabled = bpm != null, onClick = { bpm?.let { s.beat.applyBpm(it, rounding) } }) { Text("Übernehmen") }
+                Text("Automatisch", modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                Switch(checked = auto, onCheckedChange = vm::setMicAutoApply)
+            }
+            Text(
+                "Automatisch übernimmt stabile, sichere Werte; die Tipp-Fläche setzt dann nur noch die Phase.",
+                style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+            )
         }
     }
 }

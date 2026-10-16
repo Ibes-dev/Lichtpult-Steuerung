@@ -2,15 +2,14 @@ package de.sebi.dmxc3remote.net
 
 import LumosProtobuf.Audio.AudioServiceTypes.ControlPlayerThreadRequest
 import LumosProtobuf.Audio.AudioServiceTypes.PlayerThreadDescriptor
-import LumosProtobuf.BeatServiceTypes.ManualBeatFactorRequestResponse
-import LumosProtobuf.BeatServiceTypes.ManualBeatIntervalRequestResponse
-import LumosProtobuf.BeatServiceTypes.ManualBeatSyncRequest
 import LumosProtobuf.CommonTypes.EChangeType
 import LumosProtobuf.CommonTypes.ENullableBool
 import LumosProtobuf.Cuelist.CuelistGroupServiceTypes.CuelistGroupDescriptor
 import LumosProtobuf.Cuelist.CuelistServiceTypes.AllCuelistActionRequest
 import LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistActionRequest
 import LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistDescriptor
+import LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistProgressStateChangeMessage
+import LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistProgressStateChangeRequest
 import LumosProtobuf.Cuelist.CuelistServiceTypes.SetCuelistValueRequest
 import LumosProtobuf.DeviceServiceTypes.GlobalFunctionRequestResponse
 import LumosProtobuf.Executor.ExecutorServiceCRUDTypes.SetExecutorValuesRequest
@@ -29,7 +28,6 @@ import LumosProtobuf.Timecode.TimecodeServiceCRUDTypes.ETimecodeAction
 import LumosProtobuf.Timecode.TimecodeServiceCRUDTypes.TimecodeActionRequest
 import LumosProtobuf.Timecode.TimecodeServiceTypes.TimecodeDescriptor
 import LumosProtobufClient.AudioClientGrpcKt.AudioClientCoroutineStub
-import LumosProtobufClient.BeatClientGrpcKt.BeatClientCoroutineStub
 import LumosProtobufClient.CuelistClientGrpcKt.CuelistClientCoroutineStub
 import LumosProtobufClient.CuelistGroupClientGrpcKt.CuelistGroupClientCoroutineStub
 import LumosProtobufClient.DeviceClientGrpcKt.DeviceClientCoroutineStub
@@ -312,7 +310,29 @@ class CuelistModule(s: UmbraSession) : Module(s, "Cuelists") {
         }.getOrDefault(emptyMap())
     }
 
+    /** Fortschritt je Cuelist (Cue-Index -> Zustand), aus ReceiveCuelistProgressChanges. */
+    private val _progress = MutableStateFlow<Map<String, CuelistProgressStateChangeMessage>>(emptyMap())
+    val progress: StateFlow<Map<String, CuelistProgressStateChangeMessage>> = _progress.asStateFlow()
+
     override suspend fun stream() = coroutineScope {
+        // Bidi-Stream: angefragte Cuelist-IDs gehen hinaus, Fortschritt kommt zurück.
+        // Bei neuen Cuelists wird die ID-Liste erneut gesendet.
+        launch {
+            runCatching {
+                val requests = kotlinx.coroutines.flow.flow {
+                    var last: Set<String> = emptySet()
+                    _items.collect { m ->
+                        if (m.keys != last) {
+                            last = m.keys
+                            emit(CuelistProgressStateChangeRequest.newBuilder().addAllCuelistIds(m.keys).build())
+                        }
+                    }
+                }
+                stub.receiveCuelistProgressChanges(requests, s.headers).collect { msg ->
+                    _progress.update { it + (msg.cuelistId to msg) }
+                }
+            }
+        }
         launch {
             runCatching {
                 groupStub.receiveCuelistGroupChanges(s.getRequest(), s.headers).collect { m ->
@@ -337,6 +357,9 @@ class CuelistModule(s: UmbraSession) : Module(s, "Cuelists") {
         ).requireOk("CuelistAction")
     }
 
+    /** Direkt zu einem Cue springen (GO_TO mit Cue-Index). */
+    fun goTo(id: String, cueIndex: Int) = action(id, CuelistActionRequest.EAction.GO_TO, cueIndex)
+
     fun stopAll() = act("Alle Cuelists stoppen") {
         stub.dl(5).allCuelistAction(
             AllCuelistActionRequest.newBuilder().setRequestId(s.nextRequestId()).setAction(AllCuelistActionRequest.EAction.STOP).build(),
@@ -353,94 +376,6 @@ class CuelistModule(s: UmbraSession) : Module(s, "Cuelists") {
                 .build(),
             s.headers
         ).requireOk("SetCuelistValue")
-    }
-}
-
-// ============================================================== Beat
-class BeatModule(s: UmbraSession) : Module(s, "Beat") {
-    private val stub = BeatClientCoroutineStub(s.channel)
-
-    /** UNVERIFIZIERT: Intervall in ms angenommen. */
-    private val _intervalMs = MutableStateFlow(0)
-    val intervalMs: StateFlow<Int> = _intervalMs.asStateFlow()
-    private val _enabled = MutableStateFlow(false)
-    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
-    private val _factor = MutableStateFlow(1.0)
-    val factor: StateFlow<Double> = _factor.asStateFlow()
-    private val _beat = MutableStateFlow(0L)
-    val beat: StateFlow<Long> = _beat.asStateFlow()
-
-    override suspend fun load() {
-        val r = stub.dl(5).getManualBeat(s.getRequest(), s.headers)
-        _intervalMs.value = r.interval
-        _enabled.value = r.enabled
-        _factor.value = stub.dl(5).getManualBeatFactor(s.getRequest(), s.headers).factor
-    }
-
-    override suspend fun stream() {
-        stub.receiveManualBeatChanges(s.getRequest(), s.headers).collect { m ->
-            _beat.value = m.beat
-            _intervalMs.value = m.interval
-            _factor.value = m.factor
-        }
-    }
-
-    /**
-     * Tap-Tempo lokal berechnet (Mittel der letzten Intervalle, Reset nach 2 s Pause)
-     * und per SetManualBeat gesetzt. LearnManualBeat lief beim Test in eine Zeitüberschreitung
-     * (Server antwortet nicht, Zeitbasis des time-Felds undokumentiert) und wird nicht mehr genutzt.
-     */
-    private val taps = ArrayDeque<Long>()
-
-    fun tap() {
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (taps.isNotEmpty() && now - taps.last() > 2_000) taps.clear()
-        taps.addLast(now)
-        while (taps.size > 5) taps.removeFirst()
-        if (taps.size < 2) return
-        val interval = ((taps.last() - taps.first()) / (taps.size - 1)).toInt()
-        if (interval !in 150..6_000) return
-        _intervalMs.value = interval
-        s.throttler.submit("beat:tap") { sendInterval(interval, true) }
-    }
-
-    /** UNVERIFIZIERT: Sync setzt den Phasenbeginn auf "jetzt"; Zeitbasis Unix-ms angenommen, Deadline 10 s. */
-    fun sync() = act("Beat sync") {
-        stub.dl(10).syncManualBeat(
-            ManualBeatSyncRequest.newBuilder().setRequestId(s.nextRequestId()).setTime(System.currentTimeMillis()).build(),
-            s.headers
-        ).requireOk("SyncManualBeat")
-    }
-
-    private suspend fun sendInterval(interval: Int, enabled: Boolean) {
-        stub.dl(5).setManualBeat(
-            ManualBeatIntervalRequestResponse.newBuilder()
-                .setRequestId(s.nextRequestId())
-                .setInterval(interval)
-                .setEnabled(enabled)
-                .setEnabledSet(true)
-                .build(),
-            s.headers
-        ).requireOk("SetManualBeat")
-    }
-
-    fun setBpm(bpm: Double) = act("BPM setzen") {
-        val interval = (60_000.0 / bpm.coerceIn(10.0, 400.0)).toInt()
-        sendInterval(interval, true)
-        _intervalMs.value = interval
-    }
-
-    fun setEnabled(on: Boolean) = act("Beat an/aus") {
-        sendInterval(_intervalMs.value, on)
-        _enabled.value = on
-    }
-
-    fun setFactor(f: Double) = act("Beat-Faktor") {
-        stub.dl(3).setManualBeatFactor(
-            ManualBeatFactorRequestResponse.newBuilder().setRequestId(s.nextRequestId()).setFactor(f).build(),
-            s.headers
-        ).requireOk("SetManualBeatFactor")
-        _factor.value = f
     }
 }
 

@@ -38,6 +38,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -199,6 +200,14 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
     val key = "${g.id}:${p.id}"
     val dm = s.devices
     val label = p.displayName.ifBlank { p.name.ifBlank { p.id } }
+    val progValues by dm.progValues.collectAsStateWithLifecycle()
+    val fannedMap by dm.progFanned.collectAsStateWithLifecycle()
+    val appliedMap by dm.applied.collectAsStateWithLifecycle()
+    val server = progValues[key]
+    // Rücklesen: Wert aus dem DMXControl-Programmer übernehmen (auch Änderungen vom PC)
+    LaunchedEffect(server) { server?.let { v -> fromServer(v, p)?.let { localValues[key] = it } } }
+    var effectDialog by remember { mutableStateOf(false) }
+    var fanOpen by remember { mutableStateOf(false) }
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Desk.Panel).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -296,7 +305,99 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
                 )
             }
         }
+        val fanned = fannedMap[key]
+        Text(
+            when {
+                fanned != null -> "Im Programmer gefächert: " + fanned.fannedValuesList.joinToString(" … ") {
+                    if (it.valueCase == LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.DOUBLEVALUE) "%.2f".format(it.doubleValue) else it.valueCase.name
+                }
+                server != null -> "Im Programmer gesetzt"
+                else -> "Nicht im Programmer"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = if (server != null || fanned != null) Desk.Amber else Desk.TextDim
+        )
+        if (p.kind() != PropKind.UNSUPPORTED) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                androidx.compose.material3.TextButton(onClick = { effectDialog = true }) { Text("Effekt …") }
+                if (!appliedMap[key].isNullOrEmpty()) {
+                    androidx.compose.material3.TextButton(onClick = { dm.removeEffects(g.id, p.id) }) { Text("Effekte entfernen") }
+                }
+                if (p.kind() == PropKind.DOUBLE) {
+                    androidx.compose.material3.TextButton(onClick = { fanOpen = !fanOpen }) { Text(if (fanOpen) "Fächern schließen" else "Fächern") }
+                }
+            }
+        }
+        if (fanOpen && p.kind() == PropKind.DOUBLE) FanControl(s, g, p)
     }
+    if (effectDialog) EffectDialog(s, g, p) { effectDialog = false }
+}
+
+/** Server-Wert in die lokale Darstellung (normiert wie die Bedienelemente) umrechnen. */
+private fun fromServer(v: LumosProtobuf.DeviceServiceTypes.DevicePropertyValue, p: DevicePropertyDescriptor): List<Float>? {
+    return when (v.valueCase) {
+        LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.DOUBLEVALUE -> listOf(v.doubleValue.toFloat())
+        LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.COLOR -> {
+            val max = p.colorMax().toFloat()
+            listOf((v.color.r / max).toFloat(), (v.color.g / max).toFloat(), (v.color.b / max).toFloat()).map { it.coerceIn(0f, 1f) }
+        }
+        LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.POSITION -> {
+            val r = p.positionRange()
+            val x = ((v.position.pan - r.pan.start) / (r.pan.endInclusive - r.pan.start)).toFloat()
+            val y = ((v.position.tilt - r.tilt.start) / (r.tilt.endInclusive - r.tilt.start)).toFloat()
+            listOf(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f))
+        }
+        LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.BOOLVALUE -> listOf(if (v.boolValue.value) 1f else 0f)
+        else -> null
+    }
+}
+
+@Composable
+private fun FanControl(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePropertyDescriptor) {
+    val range = p.doubleRange()
+    var from by remember(g.id, p.id) { mutableStateOf(range.start.toFloat()) }
+    var to by remember(g.id, p.id) { mutableStateOf(range.endInclusive.toFloat()) }
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Desk.Surface).padding(8.dp)
+    ) {
+        Text("Von ${"%.2f".format(from)} bis ${"%.2f".format(to)} über die Geräte der Gruppe", style = MaterialTheme.typography.labelMedium)
+        Slider(from, { from = it; s.devices.setFanned(g.id, p, from.toDouble(), to.toDouble()) },
+            valueRange = range.start.toFloat()..range.endInclusive.toFloat())
+        Slider(to, { to = it; s.devices.setFanned(g.id, p, from.toDouble(), to.toDouble()) },
+            valueRange = range.start.toFloat()..range.endInclusive.toFloat())
+        Text(
+            "Ungeprüft, ob DMXControl dieses Format annimmt. Erscheint oben \"Im Programmer gefächert\", hat es geklappt.",
+            style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+        )
+    }
+}
+
+@Composable
+private fun EffectDialog(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePropertyDescriptor, onClose: () -> Unit) {
+    val all by s.devices.attachables.collectAsStateWithLifecycle()
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Effekt für ${p.displayName.ifBlank { p.name }}") },
+        text = {
+            if (all.isEmpty()) {
+                Text("DMXControl hat keine Effekte gemeldet.", color = Desk.TextDim)
+            } else {
+                LazyColumn(Modifier.height(400.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(all) { a ->
+                        Column(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Desk.Raised)
+                                .clickableNoRipple { s.devices.applyEffect(g.id, p.id, a); onClose() }
+                                .padding(10.dp)
+                        ) {
+                            Text(a.displayName.ifBlank { a.name })
+                            if (a.attachableGroup.isNotBlank()) Text(a.attachableGroup, style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onClose) { Text("Schließen") } }
+    )
 }
 
 // ============================================================== Konsole

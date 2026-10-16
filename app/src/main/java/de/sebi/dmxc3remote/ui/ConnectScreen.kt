@@ -38,6 +38,9 @@ import de.sebi.dmxc3remote.net.UmbraTarget
 @Composable
 fun ConnectScreen(vm: AppViewModel, conn: ConnState, modifier: Modifier = Modifier) {
     val discovered by vm.discovered.collectAsStateWithLifecycle()
+    val profiles by vm.profiles.collectAsStateWithLifecycle()
+    val autoConnect by vm.autoConnect.collectAsStateWithLifecycle()
+    var profileName by remember { mutableStateOf("") }
     val error by vm.lastError.collectAsStateWithLifecycle()
 
     var host by remember { mutableStateOf(vm.prefs.host) }
@@ -81,6 +84,28 @@ fun ConnectScreen(vm: AppViewModel, conn: ConnState, modifier: Modifier = Modifi
                 Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
                 TextButton(onClick = vm::clearError) { Text("OK") }
             }
+        }
+
+        if (profiles.isNotEmpty()) {
+            Text("Gespeicherte Verbindungen", style = MaterialTheme.typography.titleMedium)
+            profiles.sortedBy { it.name }.forEach { p ->
+                Card(Modifier.fillMaxWidth().clickable { persistIdentity(); vm.connect(p.toTarget()) }) {
+                    Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).padding(vertical = 10.dp)) {
+                            Text(p.name, style = MaterialTheme.typography.titleSmall)
+                            Text("${p.host}:${p.port}", style = MaterialTheme.typography.bodySmall)
+                        }
+                        TextButton(onClick = { vm.deleteProfile(p.name) }) { Text("Entfernen") }
+                    }
+                }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Automatisch verbinden")
+                Text("Beim Start mit der zuletzt genutzten Verbindung", style = MaterialTheme.typography.bodySmall)
+            }
+            androidx.compose.material3.Switch(checked = autoConnect, onCheckedChange = vm::setAutoConnect)
         }
 
         Text("Im Netzwerk gefunden", style = MaterialTheme.typography.titleMedium)
@@ -168,6 +193,23 @@ fun ConnectScreen(vm: AppViewModel, conn: ConnState, modifier: Modifier = Modifi
                 username = "DMXCDefault"
                 password = "DMXC3"
             }) { Text("Standardwerte") }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                profileName, { profileName = it }, label = { Text("Profilname, z. B. Probe") },
+                singleLine = true, modifier = Modifier.weight(1f)
+            )
+            OutlinedButton(
+                enabled = profileName.isNotBlank() && host.isNotBlank(),
+                onClick = {
+                    vm.saveProfile(
+                        de.sebi.dmxc3remote.net.ConnectionProfile(
+                            profileName.trim(), host, port.toIntOrNull() ?: UmbraConstants.UMBRA_PORT, netId
+                        )
+                    )
+                    profileName = ""
+                }
+            ) { Text("Speichern") }
         }
     }
 }

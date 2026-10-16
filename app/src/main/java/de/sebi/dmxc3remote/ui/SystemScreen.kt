@@ -36,18 +36,19 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import de.sebi.dmxc3remote.net.UmbraSession
 
 @Composable
-fun SystemScreen(s: UmbraSession) {
+fun SystemScreen(s: UmbraSession, vm: AppViewModel) {
     var section by rememberSaveable { mutableStateOf(0) }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("Projekt", "DMX-Ausgabe", "Hardware").forEachIndexed { i, t ->
+            listOf("Projekt", "DMX-Ausgabe", "Hardware", "Steuerung").forEachIndexed { i, t ->
                 androidx.compose.material3.FilterChip(selected = i == section, onClick = { section = i }, label = { Text(t) })
             }
         }
         when (section) {
             0 -> Overview(s)
             1 -> DmxMonitor(s)
-            else -> Hardware(s)
+            2 -> Hardware(s)
+            else -> ControlSettings(s, vm)
         }
     }
 }
@@ -214,6 +215,55 @@ private fun Hardware(s: UmbraSession) {
                     else MaterialTheme.colorScheme.onSurface
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ControlSettings(s: UmbraSession, vm: AppViewModel) {
+    val midiNames by vm.midi.names.collectAsStateWithLifecycle()
+    val last by vm.midi.last.collectAsStateWithLifecycle()
+    val volume by vm.volumeKeysGo.collectAsStateWithLifecycle()
+    val goId by vm.goCuelistId.collectAsStateWithLifecycle()
+    val cuelists by s.cuelists.items.collectAsStateWithLifecycle()
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Section("Externe Tasten") {
+            Text(
+                "Fußtaster, Presenter und Medientasten (Bluetooth oder USB) lösen Go bzw. Zurück der Go-Cuelist aus: " +
+                    "Bild ab / Pfeil rechts / Weiter / Play = Go, Bild auf / Pfeil links / Zurück = Zurück.",
+                style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+            )
+            Text(
+                "Go-Cuelist: " + (cuelists[goId]?.name?.ifBlank { null } ?: if (goId.isBlank()) "keine (unter Cuelists den Stern antippen)" else "nicht gefunden"),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Lautstärketasten verwenden")
+                    Text("Lauter = Go, leiser = Zurück", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+                }
+                Switch(checked = volume, onCheckedChange = vm::setVolumeKeysGo)
+            }
+        }
+        Section("Schnelleinstellungen") {
+            Text(
+                "Die Kachel \"Blackout\" lässt sich in den Android-Schnelleinstellungen hinzufügen (Bearbeiten-Stift). " +
+                    "Sie schaltet Blackout, solange die App verbunden ist.",
+                style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+            )
+        }
+        Section("MIDI-Controller") {
+            if (!vm.midi.available) Text("Dieses Gerät unterstützt kein MIDI.", color = Desk.Red)
+            if (midiNames.isEmpty()) Text("Kein Controller angeschlossen (USB-OTG oder Bluetooth-MIDI).", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+            midiNames.forEach { Text(it) }
+            Text(
+                "Zuordnung im Softdesk: Element bearbeiten, \"MIDI lernen\", Taste oder Fader am Controller bewegen.",
+                style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+            )
+            last?.let { Text("Zuletzt empfangen: ${if (it.kind == 'N') "Note" else "CC"} ${it.number}, Kanal ${it.channel + 1}, Wert ${it.value}", style = MaterialTheme.typography.bodySmall.merge(Numeric)) }
         }
     }
 }

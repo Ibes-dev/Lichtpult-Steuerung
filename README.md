@@ -16,6 +16,17 @@ Kotlin, Jetpack Compose, grpc-java (okhttp, lite) + grpc-kotlin.
 - System: Projektstatus, Hauptschalter, DMX-Monitor (512 Kanäle je Universum), DMX-Interfaces an/aus, Plugins an/aus, RDM-Liste + Discovery, Stromkreise mit Last, Modulstatus
 - Jedes Modul läuft unabhängig: Fehler eines Bereichs trennen die Sitzung nicht
 
+## Neu in 0.4.0
+- Verbindungsprofile, automatisches Verbinden beim Start, sofortiger Neuversuch bei Netzwechsel
+- Softdesk Export/Import (JSON), MIDI-Controller (USB/Bluetooth) mit MIDI-Learn und LED-Rückmeldung
+- Externe Go-Tasten (Fußtaster, Presenter, Medientasten, optional Lautstärke), Schnelleinstellungs-Kachel Blackout
+- Cuelist-Details mit Cue-Liste, Fade-Fortschritt und Sprung zu Cue
+- Programmer: Werte zurücklesen, Effekte setzen/entfernen, Fächern (ungeprüft)
+- Bühnenansicht (StageView) mit Auswahl per Antippen
+- Diagnose: Ping-Laufzeit, Status je Bereich, API-Tests (Beat-Einheit, Learn/Sync, Master-Fader), Aufrufprotokoll, Export
+- Beat: Tap auf Finger-Down, Regression, Ausreißerfilter, Rundung, Nudges, Learn/Sync mit wählbarer Zeitbasis,
+  Mikrofon-Tempoerkennung mit Hybrid-Modus, App-Metronom und Vibration pro Beat
+
 ## Build
 1. Protos laden (Version = installierte DMXControl-Version):
    - Windows: `powershell -ExecutionPolicy Bypass -File setup-protos.ps1 -Version v3.3.2`

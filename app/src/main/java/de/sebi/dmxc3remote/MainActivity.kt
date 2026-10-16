@@ -3,6 +3,7 @@ package de.sebi.dmxc3remote
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.viewModels
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,6 +36,23 @@ import de.sebi.dmxc3remote.ui.DeskTheme
 import de.sebi.dmxc3remote.ui.MainScreen
 
 class MainActivity : ComponentActivity() {
+    private val vm: AppViewModel by viewModels()
+
+    /** Fußtaster, Presenter, Medien- und (optional) Lautstärketasten -> Go/Back. */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0 && vm.hardwareKey(event.keyCode)) return true
+        if (event.action == android.view.KeyEvent.ACTION_UP && isGoKey(event.keyCode)) return true
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun isGoKey(code: Int) = vm.session.value != null && when (code) {
+        android.view.KeyEvent.KEYCODE_PAGE_DOWN, android.view.KeyEvent.KEYCODE_PAGE_UP,
+        android.view.KeyEvent.KEYCODE_MEDIA_NEXT, android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+        android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> true
+        android.view.KeyEvent.KEYCODE_VOLUME_UP, android.view.KeyEvent.KEYCODE_VOLUME_DOWN -> vm.volumeKeysGo.value
+        else -> false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashReporter.install(this)

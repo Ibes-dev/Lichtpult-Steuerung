@@ -41,7 +41,12 @@ data class SdElement(
     val fbIo: SdIo = SdIo.BOOL,
     /** Kommagetrennte Werte, die als "an" gelten; leer = globale Regeln. */
     val fbOn: String = "",
-    val showValue: Boolean = false
+    val showValue: Boolean = false,
+    /** MIDI-Zuordnung "N:Kanal:Note" bzw. "C:Kanal:CC", leer = keine. */
+    val midi: String = "",
+    /** Velocity für LED an/aus (z. B. APC mini mk2: Farbindex). */
+    val midiOn: Int = 127,
+    val midiOff: Int = 0
 )
 
 data class Softdesk(
@@ -133,7 +138,10 @@ class SoftdeskStore(context: Context) {
                 }
             ),
             fbOn = e.optString("fbOn", ""),
-            showValue = e.optBoolean("showValue", type == SdType.DISPLAY)
+            showValue = e.optBoolean("showValue", type == SdType.DISPLAY),
+            midi = e.optString("midi", ""),
+            midiOn = e.optInt("midiOn", 127),
+            midiOff = e.optInt("midiOff", 0)
         )
         return el to hasPos
     }
@@ -143,9 +151,10 @@ class SoftdeskStore(context: Context) {
         put("x", e.x); put("y", e.y); put("w", e.w); put("h", e.h); put("color", e.color)
         put("mode", e.mode.name); put("sendIo", e.sendIo.name); put("onValue", e.onValue); put("offValue", e.offValue)
         put("min", e.min); put("max", e.max); put("fbIo", e.fbIo.name); put("fbOn", e.fbOn); put("showValue", e.showValue)
+        put("midi", e.midi); put("midiOn", e.midiOn); put("midiOff", e.midiOff)
     }
 
-    private fun save(list: List<Softdesk>) {
+    private fun desksJson(list: List<Softdesk>): JSONArray {
         val arr = JSONArray()
         list.forEach { d ->
             arr.put(JSONObject().apply {
@@ -153,8 +162,43 @@ class SoftdeskStore(context: Context) {
                 put("elements", JSONArray().apply { d.elements.forEach { put(toJson(it)) } })
             })
         }
-        sp.edit().putString("desks", arr.toString()).apply()
+        return arr
+    }
+
+    private fun save(list: List<Softdesk>) {
+        sp.edit().putString("desks", desksJson(list).toString()).apply()
         _desks.value = list
+    }
+
+    // ---------------------------------------------------------------- Export / Import
+    /** Alle Softdesks und Rückmelde-Regeln als JSON (Format-Version 1). */
+    fun exportJson(): String = JSONObject().apply {
+        put("format", "dmxc3remote-softdesk")
+        put("version", 1)
+        put("exported", System.currentTimeMillis())
+        put("rules", JSONObject().apply { put("on", JSONArray(_rules.value.onWords)); put("threshold", _rules.value.threshold) })
+        put("desks", desksJson(_desks.value))
+    }.toString(2)
+
+    /**
+     * Import. replace = true ersetzt alles; sonst werden Softdesks mit gleicher ID ersetzt und neue ergänzt.
+     * Element-IDs bleiben erhalten (Verdrahtung in DMXControl gilt pro Runtime-ID dieses Geräts).
+     */
+    fun importJson(text: String, replace: Boolean): Int {
+        val root = JSONObject(text)
+        require(root.optString("format") == "dmxc3remote-softdesk") { "Keine Softdesk-Exportdatei" }
+        val old = sp.getString("desks", "[]")
+        sp.edit().putString("desks", root.getJSONArray("desks").toString()).apply()
+        val imported = loadDesks()
+        sp.edit().putString("desks", old).apply()
+        val result = if (replace) imported
+        else _desks.value.filter { d -> imported.none { it.id == d.id } } + imported
+        save(result)
+        root.optJSONObject("rules")?.let { r ->
+            val arr = r.getJSONArray("on")
+            setRules(FeedbackRules((0 until arr.length()).map { arr.getString(it) }, r.optDouble("threshold", 0.5)))
+        }
+        return imported.size
     }
 
     // ---------------------------------------------------------------- Raster

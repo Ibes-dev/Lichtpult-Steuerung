@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Brightness6
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Theaters
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.FormatListNumbered
@@ -69,8 +72,10 @@ enum class Dest(val label: String, val icon: ImageVector) {
     MASTER("Master", Icons.Filled.Brightness6),
     MACRO("Macros", Icons.Filled.Bolt),
     MEDIA("Beat & Medien", Icons.Filled.MusicNote),
+    STAGE("Bühne", Icons.Filled.Theaters),
     CONSOLE("Befehle", Icons.Filled.Code),
     SYSTEM("System", Icons.Filled.Settings),
+    DIAG("Diagnose", Icons.Filled.BugReport),
     MORE("Mehr", Icons.Filled.MoreHoriz)
 }
 
@@ -94,7 +99,11 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
             GlobalStrip(session)
             Row(Modifier.weight(1f)) {
                 if (wide) {
-                    NavigationRail(containerColor = Desk.Panel, windowInsets = WindowInsets(0, 0, 0, 0)) {
+                    NavigationRail(
+                        containerColor = Desk.Panel,
+                        windowInsets = WindowInsets(0, 0, 0, 0),
+                        modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())
+                    ) {
                         ALL.forEach { d ->
                             NavigationRailItem(
                                 selected = dest == d,
@@ -132,14 +141,16 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
 private fun Content(dest: Dest, vm: AppViewModel, s: UmbraSession, navigate: (Dest) -> Unit) {
     when (dest) {
         Dest.EXEC -> ExecutorScreen(s)
-        Dest.CUE -> CuelistScreen(s)
-        Dest.SOFT -> SoftdeskScreen(s, vm.softdesks)
+        Dest.CUE -> CuelistScreen(s, vm)
+        Dest.SOFT -> SoftdeskScreen(s, vm.softdesks, vm.midi)
         Dest.PROG -> ProgrammerScreen(s)
         Dest.MASTER -> MasterScreen(s)
         Dest.MACRO -> MacroScreen(s)
-        Dest.MEDIA -> MediaScreen(s)
+        Dest.MEDIA -> MediaScreen(s, vm)
+        Dest.STAGE -> StageScreen(s)
         Dest.CONSOLE -> ConsoleScreen(s)
-        Dest.SYSTEM -> SystemScreen(s)
+        Dest.SYSTEM -> SystemScreen(s, vm)
+        Dest.DIAG -> DiagnosticsScreen(s)
         Dest.MORE -> MoreScreen(navigate)
     }
 }

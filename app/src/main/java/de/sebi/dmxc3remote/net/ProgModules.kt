@@ -6,7 +6,15 @@ import LumosProtobuf.CommandLineServiceTypes.ExecuteOrModifyCommandLineCommandRe
 import LumosProtobuf.CommonTypes.EChangeType
 import LumosProtobuf.DeviceServiceTypes.DeviceGroupDescriptor
 import LumosProtobuf.DeviceServiceTypes.DevicePropertyDescriptor
+import LumosProtobuf.DeviceServiceTypes.AttachableData
 import LumosProtobuf.DeviceServiceTypes.DevicePropertyValue
+import LumosProtobuf.DeviceServiceTypes.DevicePropertyValueRequest
+import LumosProtobuf.DeviceServiceTypes.DevicePropertyValueResponse
+import LumosProtobuf.DeviceServiceTypes.EValueType
+import LumosProtobuf.DeviceServiceTypes.FannedPropertyValue
+import LumosProtobuf.ProgrammerServiceTypes.DeleteProgrammerAttachableRequest
+import LumosProtobuf.ProgrammerServiceTypes.SetProgrammerAttachableRequestResponse
+import LumosProtobufClient.AttachableClientGrpcKt.AttachableClientCoroutineStub
 import LumosProtobuf.LogServiceTypes.ELogLevel
 import LumosProtobuf.PresetServiceTypes.InvokePresetRequest
 import LumosProtobuf.PresetServiceTypes.PresetDescriptor
@@ -137,16 +145,95 @@ fun DevicePropertyDescriptor.colorMax(): Double {
 class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
     private val stub = DeviceClientCoroutineStub(s.channel)
     private val progStub = ProgrammerClientCoroutineStub(s.channel)
+    private val attStub = AttachableClientCoroutineStub(s.channel)
     private val _groups = MutableStateFlow<Map<String, DeviceGroupDescriptor>>(emptyMap())
     val groups: StateFlow<Map<String, DeviceGroupDescriptor>> = _groups.asStateFlow()
+
+    /** Programmer-Werte vom Server, Schlüssel "Gruppe:Eigenschaft". */
+    private val _progValues = MutableStateFlow<Map<String, DevicePropertyValue>>(emptyMap())
+    val progValues: StateFlow<Map<String, DevicePropertyValue>> = _progValues.asStateFlow()
+
+    /** Gefächerte Werte vom Server (falls der Programmer gefächert ist). */
+    private val _progFanned = MutableStateFlow<Map<String, FannedPropertyValue>>(emptyMap())
+    val progFanned: StateFlow<Map<String, FannedPropertyValue>> = _progFanned.asStateFlow()
+
+    /** Verfügbare Effekte/Attachables. */
+    private val _attachables = MutableStateFlow<List<AttachableData>>(emptyList())
+    val attachables: StateFlow<List<AttachableData>> = _attachables.asStateFlow()
+
+    /** Vom Server bestätigte Effekt-IDs je "Gruppe:Eigenschaft" (zum Entfernen). */
+    private val _applied = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    val applied: StateFlow<Map<String, List<String>>> = _applied.asStateFlow()
+
+    @Volatile private var selectedGroup: String? = null
 
     override suspend fun load() {
         _groups.value = stub.dl(15).getDeviceGroups(s.getMultiple(), s.headers).deviceGroupsList
             .filter { !it.temporary }
             .associateBy { it.id }
+        _attachables.value = runCatching {
+            attStub.dl(10).getAttachables(s.getMultiple(), s.headers).attachablesList
+                .filter { !it.disabled && !it.isFannedClone }
+                .sortedBy { it.displayName.ifBlank { it.name } }
+        }.getOrDefault(emptyList())
+        selectedGroup?.let { readBack(it) }
     }
 
-    override suspend fun stream() {
+    /** Liest alle Eigenschaften der Gruppe aus dem Programmer (GetProgrammerValue, Typ PROGRAMMER). */
+    suspend fun readBack(groupId: String) {
+        val g = _groups.value[groupId] ?: return
+        g.propertiesList.forEach { p -> readOne(groupId, p.id) }
+    }
+
+    private suspend fun readOne(groupId: String, propertyId: String) {
+        val key = "$groupId:$propertyId"
+        val r = runCatching {
+            progStub.dl(5).getProgrammerValue(
+                DevicePropertyValueRequest.newBuilder()
+                    .setDeviceOrGroupId(groupId)
+                    .setPropertyId(propertyId)
+                    .setUserContextId(s.userContextId)
+                    .setType(EValueType.PROGRAMMER)
+                    .build(),
+                s.headers
+            )
+        }.getOrNull() ?: return
+        val dpv = when (r.pvCase) {
+            DevicePropertyValueResponse.PvCase.DPV -> r.dpv
+            DevicePropertyValueResponse.PvCase.PROPERTYVALUE ->
+                if (r.propertyValue.hasDpv()) r.propertyValue.dpv else null
+            else -> null
+        }
+        val fpv = when (r.pvCase) {
+            DevicePropertyValueResponse.PvCase.FPV -> r.fpv
+            DevicePropertyValueResponse.PvCase.PROPERTYVALUE ->
+                if (r.propertyValue.hasFpv()) r.propertyValue.fpv else null
+            else -> null
+        }
+        if (dpv != null && dpv.valueCase != DevicePropertyValue.ValueCase.VALUE_NOT_SET) _progValues.update { it + (key to dpv) }
+        else _progValues.update { it - key }
+        if (fpv != null && fpv.fannedValuesCount > 0) _progFanned.update { it + (key to fpv) }
+        else _progFanned.update { it - key }
+    }
+
+    override suspend fun stream() = coroutineScope {
+        // Programmer-Änderungen (auch vom PC oder anderen Clients) -> betroffene Werte neu lesen
+        launch {
+            runCatching {
+                progStub.receiveProgrammerChanges(s.getRequest(), s.headers).collect { m ->
+                    val g = selectedGroup ?: return@collect
+                    if (m.userContextId.isNotBlank() && m.userContextId != s.userContextId) return@collect
+                    when {
+                        m.deviceGroupId == g && m.devicePropertyId.isNotBlank() -> readOne(g, m.devicePropertyId)
+                        m.deviceGroupId.isBlank() || m.deviceGroupId == g -> readBack(g)
+                    }
+                }
+            }
+        }
+        groupChanges()
+    }
+
+    private suspend fun groupChanges() {
         stub.receiveDeviceGroupChanges(s.getRequest(), s.headers).collect { m ->
             if (m.changeType == EChangeType.Changed && !m.hasDeviceGroupData() && m.deviceGroupId.isNotBlank()) {
                 stub.dl(5).getDeviceGroups(s.getMultiple(listOf(m.deviceGroupId)), s.headers).deviceGroupsList
@@ -158,8 +245,72 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
     }
 
     fun select(groupIds: List<String>) = act("Auswahl") {
+        selectedGroup = groupIds.singleOrNull()
         s.userStub.dl().selectDevicesAndGroups(s.getMultiple(groupIds), s.headers).requireOk("SelectDevicesAndGroups")
+        selectedGroup?.let { readBack(it) }
     }
+
+    /** Auswahl beliebiger Geräte und Gruppen (StageView). */
+    fun selectIds(ids: List<String>) = act("Auswahl") {
+        s.userStub.dl().selectDevicesAndGroups(s.getMultiple(ids), s.headers).requireOk("SelectDevicesAndGroups")
+    }
+
+    /** Effekt auf eine Eigenschaft der Gruppe legen. UNVERIFIZIERT: Attachable wird so übergeben, wie GetAttachables es liefert. */
+    fun applyEffect(groupId: String, propertyId: String, a: AttachableData) = act("Effekt") {
+        val r = progStub.dl(5).setProgrammerAttachable(
+            SetProgrammerAttachableRequestResponse.newBuilder()
+                .setRequestId(s.nextRequestId())
+                .setGroupId(groupId)
+                .setPropertyId(propertyId)
+                .setUserContextId(s.userContextId)
+                .setAttachable(a)
+                .build(),
+            s.headers
+        )
+        val id = r.attachable.id.ifBlank { a.id }
+        _applied.update { m -> m + ("$groupId:$propertyId" to ((m["$groupId:$propertyId"] ?: emptyList()) + id)) }
+        s.emit("Effekt ${a.displayName.ifBlank { a.name }} gesetzt")
+    }
+
+    fun removeEffects(groupId: String, propertyId: String) = act("Effekte entfernen") {
+        val key = "$groupId:$propertyId"
+        (_applied.value[key] ?: emptyList()).forEach { id ->
+            progStub.dl(5).deleteProgrammerAttachable(
+                DeleteProgrammerAttachableRequest.newBuilder()
+                    .setRequestId(s.nextRequestId())
+                    .setAttachableId(id)
+                    .setUserContextId(s.userContextId)
+                    .build(),
+                s.headers
+            ).requireOk("DeleteProgrammerAttachable")
+        }
+        _applied.update { it - key }
+    }
+
+    /**
+     * Fächern von Wert "from" bis "to" über die Geräte der Gruppe.
+     * UNVERIFIZIERT: Format von FannedPropertyValue (operator leer, zwei Stützwerte). Ob der Server
+     * es angenommen hat, zeigt das Rücklesen (gefächerter Wert erscheint unter der Eigenschaft).
+     */
+    fun setFanned(groupId: String, p: DevicePropertyDescriptor, from: Double, to: Double) =
+        s.throttler.submit("fan:$groupId:${p.id}") {
+            progStub.dl(3).setProgrammerValue(
+                SetProgrammerValueRequest.newBuilder()
+                    .setGroupId(groupId)
+                    .setPropertyId(p.id)
+                    .setUserContextId(s.userContextId)
+                    .setFpv(
+                        FannedPropertyValue.newBuilder()
+                            .setPropertyTypeAQ(p.devicePropertyTypeAQ)
+                            .addFannedValues(dpv(groupId, p.id).setDoubleValue(from).build())
+                            .addFannedValues(dpv(groupId, p.id).setDoubleValue(to).build())
+                            .build()
+                    )
+                    .build(),
+                s.headers
+            )
+            readOne(groupId, p.id)
+        }
 
     private suspend fun setValue(groupId: String, propertyId: String, value: DevicePropertyValue) {
         progStub.dl(3).setProgrammerValue(

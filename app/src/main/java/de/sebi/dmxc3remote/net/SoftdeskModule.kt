@@ -217,7 +217,6 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
             .map { it.element.id }.filter { mine(it) && it !in validSources }
         val sinks = stub.dl(10).getInputSinks(s.getMultiple(), s.headers).sinksList
             .map { it.element.id }.filter { mine(it) && it !in validSinks }
-        var removed = 0
         sources.forEach { id ->
             runCatching {
                 stub.dl(5).createOrUpdateOrDeleteSourceProxy(
@@ -225,8 +224,7 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
                         .setChangeType(EChangeType.Removed).setUserContextId(s.userContextId).setRuntimeId(s.runtimeId).build(),
                     s.headers
                 ).requireOk("Eingang $id entfernen")
-            }.onSuccess { removed++; log("Verwaist entfernt: Eingang $id") }
-                .onFailure { log("Entfernen fehlgeschlagen: Eingang $id: ${it.message}") }
+            }.onFailure { log("Abgelehnt: Eingang $id: ${it.message}") }
         }
         sinks.forEach { id ->
             runCatching {
@@ -235,16 +233,38 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
                         .setChangeType(EChangeType.Removed).setUserContextId(s.userContextId).setRuntimeId(s.runtimeId).build(),
                     s.headers
                 ).requireOk("Ausgang $id entfernen")
-            }.onSuccess { removed++; log("Verwaist entfernt: Ausgang $id") }
-                .onFailure { log("Entfernen fehlgeschlagen: Ausgang $id: ${it.message}") }
+            }.onFailure { log("Abgelehnt: Ausgang $id: ${it.message}") }
+        }
+        // Gegenprobe: der Server bestätigt das Entfernen auch dann, wenn der Kanal bestehen bleibt
+        val stillSources = stub.dl(10).getInputSources(s.getMultiple(), s.headers).sourcesList.map { it.element.id }.toSet()
+        val stillSinks = stub.dl(10).getInputSinks(s.getMultiple(), s.headers).sinksList.map { it.element.id }.toSet()
+        var removed = 0
+        sources.forEach { id ->
+            if (id in stillSources) log("Bleibt bestehen: Eingang $id (vermutlich noch verdrahtet)")
+            else { removed++; log("Entfernt: Eingang $id") }
+        }
+        sinks.forEach { id ->
+            if (id in stillSinks) log("Bleibt bestehen: Ausgang $id (vermutlich noch verdrahtet)")
+            else { removed++; log("Entfernt: Ausgang $id") }
         }
         runCatching { verify() }
+        _orphansLeft.value = (sources.count { it in stillSources } + sinks.count { it in stillSinks })
         return removed
     }
 
+    private val _orphansLeft = MutableStateFlow(0)
+
     fun cleanup(includeOldInstalls: Boolean = false) = act("Aufräumen") {
         val n = removeOrphans(includeOldInstalls)
-        s.emit(if (n == 0) "Keine verwaisten Kanäle gefunden" else "$n verwaiste Kanäle entfernt")
+        val left = _orphansLeft.value
+        s.emit(
+            when {
+                n == 0 && left == 0 -> "Keine verwaisten Kanäle gefunden"
+                left == 0 -> "$n verwaiste Kanäle entfernt"
+                else -> "$n entfernt, $left bleiben bestehen – Verdrahtung in der Eingangszuweisung löschen"
+            },
+            isError = left > 0
+        )
     }
 
     private suspend fun verify() {

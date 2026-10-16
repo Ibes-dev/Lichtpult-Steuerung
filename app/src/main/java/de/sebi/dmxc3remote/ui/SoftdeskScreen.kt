@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -88,7 +89,20 @@ val SD_PALETTE = listOf(
 private fun SdElement.colorValue() = SD_PALETTE[color.mod(SD_PALETTE.size)]
 
 @Composable
-fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore) {
+fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3remote.midi.MidiHub) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var importUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    val exporter = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) runCatching {
+            ctx.contentResolver.openOutputStream(uri)?.use { it.write(store.exportJson().toByteArray()) }
+            s.emit("Softdesks exportiert")
+        }.onFailure { s.emit("Export: ${it.message}", isError = true) }
+    }
+    val importer = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri -> importUri = uri }
     val desks by store.desks.collectAsStateWithLifecycle()
     val rules by store.rules.collectAsStateWithLifecycle()
     val fb by s.softdesk.feedback.collectAsStateWithLifecycle()
@@ -135,22 +149,22 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore) {
         }
         if (edit) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp),
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (desk != null) OutlinedButton(onClick = { deskDialog = true }) { Text("Raster") }
                 OutlinedButton(onClick = { rulesDialog = true }) { Text("Rückmeldung") }
+                OutlinedButton(onClick = { exporter.launch("softdesks.json") }) { Text("Export") }
+                OutlinedButton(onClick = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) }) { Text("Import") }
                 OutlinedButton(onClick = { diagDialog = true }) { Text("Diagnose") }
-                Text(
-                    server?.let { "DMXControl: ${it.first} Eingänge, ${it.second} Ausgänge" } ?: "$registered angemeldet",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Desk.TextDim,
-                    modifier = Modifier.weight(1f),
-                    textAlign = TextAlign.End,
-                    maxLines = 2
-                )
             }
+            Text(
+                server?.let { "In DMXControl: ${it.first} Eingänge, ${it.second} Ausgänge" } ?: "$registered angemeldet",
+                style = MaterialTheme.typography.labelSmall,
+                color = Desk.TextDim,
+                modifier = Modifier.padding(horizontal = 10.dp)
+            )
         }
 
         if (desk == null) {
@@ -179,6 +193,7 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore) {
             e = ed,
             desk = desk,
             rules = rules,
+            midi = midi,
             onDismiss = { editingId = null },
             onSave = { store.updateElement(desk.id, it); editingId = null },
             onDelete = { store.deleteElement(desk.id, ed.id); editingId = null },
@@ -198,6 +213,24 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore) {
         }) { store.updateDesk(it); deskDialog = false }
     }
     if (diagDialog) DiagDialog(s) { diagDialog = false }
+    val iu = importUri
+    if (iu != null) {
+        fun doImport(replace: Boolean) {
+            runCatching {
+                val text = ctx.contentResolver.openInputStream(iu)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: error("Datei leer")
+                val n = store.importJson(text, replace)
+                s.emit("$n Softdesk(s) importiert")
+            }.onFailure { s.emit("Import: ${it.message}", isError = true) }
+            importUri = null
+        }
+        AlertDialog(
+            onDismissRequest = { importUri = null },
+            title = { Text("Softdesks importieren") },
+            text = { Text("Ergänzen behält vorhandene Softdesks und ersetzt nur gleichnamige IDs. Ersetzen löscht alle vorhandenen.") },
+            confirmButton = { TextButton(onClick = { doImport(false) }) { Text("Ergänzen") } },
+            dismissButton = { TextButton(onClick = { doImport(true) }) { Text("Alles ersetzen", color = Desk.Red) } }
+        )
+    }
     if (rulesDialog) {
         RulesDialog(rules, onDismiss = { rulesDialog = false }) { store.setRules(it); rulesDialog = false }
     }
@@ -542,6 +575,7 @@ private fun ElementEditor(
     e: SdElement,
     desk: Softdesk,
     rules: FeedbackRules,
+    midi: de.sebi.dmxc3remote.midi.MidiHub,
     onDismiss: () -> Unit,
     onSave: (SdElement) -> Unit,
     onDelete: () -> Unit,
@@ -551,6 +585,14 @@ private fun ElementEditor(
     var minText by remember(e.id) { mutableStateOf(e.min.toString()) }
     var maxText by remember(e.id) { mutableStateOf(e.max.toString()) }
     var confirmDelete by remember(e.id) { mutableStateOf(false) }
+    val learning by midi.learning.collectAsStateWithLifecycle()
+    val learned by midi.learned.collectAsStateWithLifecycle()
+    // gelernte Zuordnung in die Bearbeitungskopie übernehmen (sonst überschreibt Speichern sie)
+    androidx.compose.runtime.LaunchedEffect(learned) {
+        val l = learned
+        if (l != null && l.first == e.id) d = d.copy(midi = l.second)
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { if (midi.learning.value == e.id) midi.learning.value = null } }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("${d.type.label} bearbeiten") },
@@ -621,6 +663,37 @@ private fun ElementEditor(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Empfangenen Wert anzeigen", modifier = Modifier.weight(1f))
                         Switch(checked = d.showValue, onCheckedChange = { d = d.copy(showValue = it) })
+                    }
+                }
+                if (d.type == SdType.BUTTON || d.type == SdType.FADER || d.type == SdType.LED) {
+                    EditorHeading("MIDI-Controller")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (d.midi.isBlank()) "Keine Zuordnung" else midiLabel(d.midi),
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (d.midi.isNotBlank()) TextButton(onClick = { d = d.copy(midi = "") }) { Text("Entfernen") }
+                        TextButton(onClick = { midi.learning.value = if (learning == e.id) null else e.id }) {
+                            Text(if (learning == e.id) "Warte auf MIDI …" else "MIDI lernen")
+                        }
+                    }
+                    if (d.midi.startsWith("N:") && d.type != SdType.FADER) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                d.midiOn.toString(), { v -> v.toIntOrNull()?.let { d = d.copy(midiOn = it.coerceIn(0, 127)) } },
+                                label = { Text("LED an") }, singleLine = true, modifier = Modifier.weight(1f),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            )
+                            OutlinedTextField(
+                                d.midiOff.toString(), { v -> v.toIntOrNull()?.let { d = d.copy(midiOff = it.coerceIn(0, 127)) } },
+                                label = { Text("LED aus") }, singleLine = true, modifier = Modifier.weight(1f),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            )
+                        }
+                        Text(
+                            "Velocity der LED-Rückmeldung. Beim APC mini mk2 bestimmt sie die Farbe (z. B. 5 rot, 21 grün).",
+                            style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+                        )
                     }
                 }
                 HorizontalDivider(Modifier.padding(top = 8.dp))
@@ -773,4 +846,11 @@ private fun DiagDialog(s: UmbraSession, onDismiss: () -> Unit) {
             }) { Text("Kopieren") }
         }
     )
+}
+
+private fun midiLabel(key: String): String {
+    val p = key.split(':')
+    if (p.size != 3) return key
+    val kind = if (p[0] == "N") "Note" else "Regler (CC)"
+    return "$kind ${p[2]}, Kanal ${(p[1].toIntOrNull() ?: 0) + 1}"
 }
