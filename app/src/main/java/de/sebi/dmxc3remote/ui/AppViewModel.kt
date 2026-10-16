@@ -74,6 +74,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val beatRounding = MutableStateFlow(prefs.beatRounding)
     val beatHaptic = MutableStateFlow(prefs.beatHaptic)
     val micAutoApply = MutableStateFlow(prefs.micAutoApply)
+    val micToDmxc = MutableStateFlow(prefs.micToDmxc)
+    val navOrder = MutableStateFlow(prefs.navOrder)
     val goCuelistId = MutableStateFlow(prefs.goCuelistId)
     val volumeKeysGo = MutableStateFlow(prefs.volumeKeysGo)
     val autoConnect = MutableStateFlow(prefs.autoConnect)
@@ -129,6 +131,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setBeatRounding(v: Int) { prefs.beatRounding = v; beatRounding.value = v }
     fun setBeatHaptic(v: Boolean) { prefs.beatHaptic = v; beatHaptic.value = v }
     fun setMicAutoApply(v: Boolean) { prefs.micAutoApply = v; micAutoApply.value = v }
+    fun setMicToDmxc(v: Boolean) { prefs.micToDmxc = v; micToDmxc.value = v }
+    fun setNavOrder(names: List<String>) { val v = names.joinToString(","); prefs.navOrder = v; navOrder.value = v }
+
+    /** Mikrofon im ViewModel-Scope: läuft weiter, auch wenn der Medien-Tab verlassen wird. */
+    fun startMic() = mic.start(viewModelScope)
+    fun stopMic() = mic.stop()
     fun setGoCuelist(id: String) { prefs.goCuelistId = id; goCuelistId.value = id }
     fun setVolumeKeysGo(v: Boolean) { prefs.volumeKeysGo = v; volumeKeysGo.value = v }
 
@@ -271,7 +279,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             while (isActive) {
                 attempt++
                 _conn.value = ConnState.Connecting(target, attempt)
-                val s = UmbraSession(target, identity(), softdesks)
+                val s = UmbraSession(target, identity(), softdesks, mic, micToDmxc)
                 var failure: String
                 try {
                     s.run {

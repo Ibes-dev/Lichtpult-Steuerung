@@ -212,7 +212,10 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
         val validSinks = local.filter { it.type.hasSink }.map { sinkId(it) }.toSet()
         // includeOldInstalls: auch Kanäle mit fremder Runtime-ID dieser App (frühere Installation).
         // Achtung: träfe auch eine zweite, parallel verbundene Installation auf einem anderen Gerät.
-        val mine: (String) -> Boolean = { id -> id.startsWith(prefix) || (includeOldInstalls && id.startsWith("DMXC3Remote.")) }
+        // ".mic." = Eingänge der Mikrofon-Analyse, gehören nicht zum Softdesk
+        val mine: (String) -> Boolean = { id ->
+            !id.contains(".mic.") && (id.startsWith(prefix) || (includeOldInstalls && id.startsWith("DMXC3Remote.")))
+        }
         val sources = stub.dl(10).getInputSources(s.getMultiple(), s.headers).sourcesList
             .map { it.element.id }.filter { mine(it) && it !in validSources }
         val sinks = stub.dl(10).getInputSinks(s.getMultiple(), s.headers).sinksList

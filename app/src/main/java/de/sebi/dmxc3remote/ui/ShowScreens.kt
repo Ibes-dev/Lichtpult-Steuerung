@@ -654,19 +654,21 @@ private fun MicSection(s: UmbraSession, vm: AppViewModel) {
     val err by mic.error.collectAsStateWithLifecycle()
     val auto by vm.micAutoApply.collectAsStateWithLifecycle()
     val rounding by vm.beatRounding.collectAsStateWithLifecycle()
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val features by mic.features.collectAsStateWithLifecycle()
+    val toDmxc by vm.micToDmxc.collectAsStateWithLifecycle()
+    val sentReg by s.micFeatures.registered.collectAsStateWithLifecycle()
+    val sendErr by s.micFeatures.error.collectAsStateWithLifecycle()
     val permission = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-    ) { granted -> if (granted) mic.start(scope) }
+    ) { granted -> if (granted) vm.startMic() }
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { mic.stop() } }
 
-    Section("Tempo aus dem Mikrofon", error = err, actions = {
+    Section("Mikrofon: Tempo und Stimmung", error = err ?: sendErr, actions = {
         Switch(checked = running, onCheckedChange = { on ->
-            if (!on) mic.stop()
+            if (!on) vm.stopMic()
             else if (androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.RECORD_AUDIO) ==
                 android.content.pm.PackageManager.PERMISSION_GRANTED
-            ) mic.start(scope)
+            ) vm.startMic()
             else permission.launch(android.Manifest.permission.RECORD_AUDIO)
         })
     }) {
@@ -706,7 +708,50 @@ private fun MicSection(s: UmbraSession, vm: AppViewModel) {
                 "Automatisch übernimmt stabile, sichere Werte; die Tipp-Fläche setzt dann nur noch die Phase.",
                 style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
             )
+            features?.let { f ->
+                HorizontalDividerCompat()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(f.mood, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                    if (f.key.isNotBlank()) Text(f.key, style = MaterialTheme.typography.titleMedium, color = Desk.TextDim)
+                }
+                FeatureBar("Energie", f.energy, Desk.Amber)
+                FeatureBar("Aktivierung", f.arousal, Desk.Red)
+                FeatureBar("Helligkeit", f.brightness, Desk.Cyan)
+                FeatureBar("Stimmung dunkel ↔ hell", (f.valence + 1) / 2, Desk.Green)
+                Text("Anschläge: ${"%.1f".format(f.onsetRate)} pro Sekunde", style = MaterialTheme.typography.bodySmall.merge(Numeric), color = Desk.TextDim)
+            }
         }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("An DMXControl senden")
+                Text(
+                    if (toDmxc && sentReg) "Eingänge unter \"Android: ${s.clientName}\" → Mikrofon-Analyse"
+                    else "Stellt Stimmung, Tonart, Energie, Tempo usw. als Eingänge in der Eingangszuweisung bereit",
+                    style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+                )
+            }
+            Switch(checked = toDmxc, onCheckedChange = vm::setMicToDmxc)
+        }
+        Text(
+            "Heuristik ohne KI: Dur/Moll und Helligkeit ergeben die Richtung, Lautheit, Anschläge und Tempo die Aktivierung. " +
+                "Das Mikrofon läuft weiter, wenn du den Tab wechselst.",
+            style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+        )
+    }
+}
+
+@Composable
+private fun HorizontalDividerCompat() = androidx.compose.material3.HorizontalDivider(color = Desk.Line)
+
+@Composable
+private fun FeatureBar(label: String, v: Double, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = Desk.TextDim, modifier = Modifier.width(150.dp))
+        androidx.compose.material3.LinearProgressIndicator(
+            progress = { v.toFloat().coerceIn(0f, 1f) },
+            modifier = Modifier.weight(1f),
+            color = color
+        )
     }
 }
 

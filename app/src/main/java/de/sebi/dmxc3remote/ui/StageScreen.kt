@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -93,12 +94,66 @@ fun StageScreen(s: UmbraSession) {
         }
         val minX = items.minOf { it.x }; val minY = items.minOf { it.y }
         val maxX = items.maxOf { it.x + it.w }; val maxY = items.maxOf { it.y + it.h }
-        BoxWithConstraints(Modifier.fillMaxSize().padding(10.dp).clip(RoundedCornerShape(10.dp)).background(Desk.Panel)) {
+        val wide = isWide()
+        val selGroup by s.devices.selectionGroup.collectAsStateWithLifecycle()
+        val presets by s.presets.items.collectAsStateWithLifecycle()
+        val presetErr by s.presets.error.collectAsStateWithLifecycle()
+        val panel: @Composable (Modifier) -> Unit = { mod ->
+            Column(mod) {
+                Text(
+                    when {
+                        selected.isEmpty() -> "Nichts ausgewählt"
+                        selGroup == null -> "Auswahl ohne Gruppe von DMXControl"
+                        else -> "Auswahl: ${selGroup!!.name.ifBlank { "${selected.size} Elemente" }}"
+                    },
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+                if (selected.isNotEmpty()) {
+                    PropertyPane(
+                        s, selGroup,
+                        presets.values.sortedBy { it.name }.map { it.presetId to it.name },
+                        presetErr, Modifier.fillMaxSize()
+                    )
+                }
+            }
+        }
+        val canvasBox: @Composable (Modifier) -> Unit = { mod -> StageCanvas(mod, items.map { StageItem(it.id, it.label, it.x, it.y, it.w, it.h, it.group) }, minX, minY, maxX, maxY, selected) { id ->
+            selected = if (id in selected) selected - id else selected + id
+            s.devices.selectIds(selected.toList())
+        } }
+        if (wide) {
+            Row(Modifier.fillMaxSize()) {
+                canvasBox(Modifier.weight(1f).fillMaxSize())
+                panel(Modifier.width(400.dp).fillMaxSize())
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                canvasBox(Modifier.weight(if (selected.isEmpty()) 1f else 0.45f).fillMaxWidth())
+                if (selected.isNotEmpty()) panel(Modifier.weight(0.55f).fillMaxWidth())
+            }
+        }
+    }
+}
+
+data class StageItem(val id: String, val label: String, val x: Float, val y: Float, val w: Float, val h: Float, val group: Boolean)
+
+@Composable
+private fun StageCanvas(
+    modifier: Modifier,
+    items: List<StageItem>,
+    minX: Float, minY: Float, maxX: Float, maxY: Float,
+    selected: Set<String>,
+    onToggle: (String) -> Unit
+) {
+    val toggle by androidx.compose.runtime.rememberUpdatedState(onToggle)
+    run {
+        BoxWithConstraints(modifier.padding(10.dp).clip(RoundedCornerShape(10.dp)).background(Desk.Panel)) {
             val wPx = constraints.maxWidth.toFloat()
             val hPx = constraints.maxHeight.toFloat()
             val pad = 16f
             val scale = minOf((wPx - 2 * pad) / (maxX - minX).coerceAtLeast(1f), (hPx - 2 * pad) / (maxY - minY).coerceAtLeast(1f))
-            fun rectOf(i: Item) = Rect(
+            fun rectOf(i: StageItem) = Rect(
                 Offset(pad + (i.x - minX) * scale, pad + (i.y - minY) * scale),
                 Size(i.w * scale, i.h * scale)
             )
@@ -106,8 +161,7 @@ fun StageScreen(s: UmbraSession) {
                 Modifier.fillMaxSize().pointerInput(items, scale) {
                     detectTapGestures { pos ->
                         val hit = items.lastOrNull { rectOf(it).inflate(6f).contains(pos) } ?: return@detectTapGestures
-                        selected = if (hit.id in selected) selected - hit.id else selected + hit.id
-                        s.devices.selectIds(selected.toList())
+                        toggle(hit.id)
                     }
                 }
             ) {

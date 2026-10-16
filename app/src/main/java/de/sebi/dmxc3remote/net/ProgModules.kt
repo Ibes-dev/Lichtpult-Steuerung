@@ -167,6 +167,32 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
 
     @Volatile private var selectedGroup: String? = null
 
+    /**
+     * Gruppe, die DMXControl für die aktuelle Auswahl im UserContext führt (selectedDeviceGroup).
+     * Bei Auswahl einzelner Geräte ist das vermutlich eine temporäre Gruppe (UNVERIFIZIERT);
+     * sie wird deshalb auch geladen, wenn sie in der normalen Gruppenliste ausgeblendet ist.
+     */
+    private val _selectionGroup = MutableStateFlow<DeviceGroupDescriptor?>(null)
+    val selectionGroup: StateFlow<DeviceGroupDescriptor?> = _selectionGroup.asStateFlow()
+
+    private suspend fun fetchGroup(id: String): DeviceGroupDescriptor? = runCatching {
+        stub.dl(5).getDeviceGroups(s.getMultiple(listOf(id)), s.headers).deviceGroupsList.firstOrNull { it.id == id }
+    }.getOrNull()
+
+    /** Auswahlgruppe neu bestimmen und deren Programmer-Werte lesen. */
+    private suspend fun refreshSelection(groupId: String?) {
+        if (groupId.isNullOrBlank()) {
+            _selectionGroup.value = null
+            return
+        }
+        val g = _groups.value[groupId] ?: fetchGroup(groupId)
+        _selectionGroup.value = g
+        if (g != null) {
+            selectedGroup = g.id
+            g.propertiesList.forEach { p -> readOne(g.id, p.id) }
+        }
+    }
+
     override suspend fun load() {
         _groups.value = stub.dl(15).getDeviceGroups(s.getMultiple(), s.headers).deviceGroupsList
             .filter { !it.temporary }
@@ -230,6 +256,17 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
                 }
             }
         }
+        // Auswahl im UserContext verfolgen (Bühnenansicht, DMXControl-GUI, andere Clients)
+        launch {
+            var last: String? = null
+            s.userContext.collect { ctx ->
+                val gid = ctx?.selectedDeviceGroup?.ifBlank { null }
+                if (gid != last) {
+                    last = gid
+                    refreshSelection(gid)
+                }
+            }
+        }
         groupChanges()
     }
 
@@ -250,9 +287,21 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
         selectedGroup?.let { readBack(it) }
     }
 
-    /** Auswahl beliebiger Geräte und Gruppen (StageView). */
+    /** Auswahl beliebiger Geräte und Gruppen (StageView); danach die resultierende Auswahlgruppe lesen. */
     fun selectIds(ids: List<String>) = act("Auswahl") {
         s.userStub.dl().selectDevicesAndGroups(s.getMultiple(ids), s.headers).requireOk("SelectDevicesAndGroups")
+        if (ids.isEmpty()) {
+            refreshSelection(null)
+            return@act
+        }
+        // UserContext direkt abfragen, falls der Änderungs-Stream verzögert
+        val ctx = runCatching {
+            s.userStub.dl().getUserContext(s.getMultiple(listOf(s.userContextId)), s.headers).userContext
+        }.getOrNull()
+        val gid = ctx?.selectedDeviceGroup?.ifBlank { null }
+            ?: ids.singleOrNull()?.takeIf { _groups.value.containsKey(it) }
+        refreshSelection(gid)
+        if (gid == null) s.emit("DMXControl meldet keine Auswahlgruppe; Werte lassen sich nur über Gruppen setzen", isError = true)
     }
 
     /** Effekt auf eine Eigenschaft der Gruppe legen. UNVERIFIZIERT: Attachable wird so übergeben, wie GetAttachables es liefert. */

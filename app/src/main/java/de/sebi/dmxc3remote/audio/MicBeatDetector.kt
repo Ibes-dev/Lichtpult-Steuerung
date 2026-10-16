@@ -25,6 +25,24 @@ import kotlin.math.sqrt
  *  - Tempo: Autokorrelation der Onset-Kurve über 6 s, Suchbereich 70–180 BPM, parabolisch verfeinert
  * Liefert BPM, Konfidenz (0..1) und Pegel. Taugt als Vorschlag, den ein Tap bestätigt (Hybrid).
  */
+/** Merkmale der Musik, ca. jede Sekunde aktualisiert. Alle 0..1-Werte relativ, nicht kalibriert. */
+data class AudioFeatures(
+    val energy: Double,        // Lautheit relativ zum gleitenden Maximum der letzten ~30 s
+    val brightness: Double,    // spektraler Schwerpunkt, 0 = dumpf, 1 = hell
+    val onsetRate: Double,     // Anschläge pro Sekunde
+    val bpm: Double?,
+    val key: String,           // z. B. "a-Moll", leer wenn unsicher
+    val major: Boolean,
+    val keyConfidence: Double,
+    val arousal: Double,       // Aktivierung 0..1
+    val valence: Double,       // Stimmungsrichtung -1 (dunkel) .. +1 (hell)
+    val mood: String,
+    val moodIndex: Int
+)
+
+/** Stimmungsklassen; Index wird als Zahl an DMXControl gesendet. */
+val MOODS = listOf("Stille", "Melancholisch", "Entspannt", "Neutral", "Aggressiv", "Euphorisch")
+
 class MicBeatDetector {
     private val _bpm = MutableStateFlow<Double?>(null)
     val bpm: StateFlow<Double?> = _bpm.asStateFlow()
@@ -36,6 +54,9 @@ class MicBeatDetector {
     val running: StateFlow<Boolean> = _running.asStateFlow()
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
+
+    private val _features = MutableStateFlow<AudioFeatures?>(null)
+    val features: StateFlow<AudioFeatures?> = _features.asStateFlow()
 
     /** Zeitpunkt (Unix-ms) des letzten erkannten Onsets, für die Phase im Hybrid-Modus. */
     @Volatile var lastOnsetAt: Long = 0L
@@ -86,6 +107,7 @@ class MicBeatDetector {
             }
             val bp = Biquad(78.0, 0.7, sampleRate.toDouble()) // Mitte ~78 Hz, Band grob 40–150 Hz
             val buf = ShortArray(hop)
+            val fa = FeatureAnalyzer(sampleRate)
             val onset = DoubleArray(window)
             var idx = 0
             var filled = 0
@@ -106,24 +128,30 @@ class MicBeatDetector {
                         val y = bp.p(x)
                         e += y * y
                     }
+                    fa.push(buf, n)
                     e = sqrt(e / n)
                     _level.value = peak
                     // Onset: Zunahme gegenüber geglätteter Energie
                     smooth = 0.9 * smooth + 0.1 * e
                     val o = max(0.0, e - max(prevEnergy, smooth))
                     prevEnergy = e
-                    if (o > 0 && o > 0.6 * (onset.maxOrNull() ?: 0.0)) lastOnsetAt = System.currentTimeMillis()
+                    if (o > 0 && o > 0.6 * (onset.maxOrNull() ?: 0.0)) {
+                        lastOnsetAt = System.currentTimeMillis()
+                        fa.onset()
+                    }
                     onset[idx] = o
                     idx = (idx + 1) % window
                     if (filled < window) filled++
-                    if (++framesSinceEstimate >= frameRate.toInt() && filled == window) {
+                    if (++framesSinceEstimate >= frameRate.toInt()) {
                         framesSinceEstimate = 0
-                        estimate(onset, idx)
+                        if (filled == window) estimate(onset, idx)
+                        _features.value = fa.features(_bpm.value, peak)
                     }
                 }
             } finally {
                 rec.stop(); rec.release()
                 _running.value = false
+                _features.value = null
             }
         }
     }

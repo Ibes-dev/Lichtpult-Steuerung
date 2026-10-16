@@ -106,7 +106,9 @@ abstract class Module(protected val s: UmbraSession, val title: String) {
 class UmbraSession(
     val target: UmbraTarget,
     private val identity: ClientIdentity,
-    softdeskStore: SoftdeskStore
+    softdeskStore: SoftdeskStore,
+    mic: de.sebi.dmxc3remote.audio.MicBeatDetector,
+    micToDmxc: StateFlow<Boolean>
 ) {
     val channel: ManagedChannel = OkHttpChannelBuilder
         .forAddress(target.host, target.port)
@@ -166,10 +168,11 @@ class UmbraSession(
     val system = SystemModule(this)
     val softdesk = SoftdeskModule(this, softdeskStore)
     val stage = StageModule(this)
+    val micFeatures = MicFeaturesModule(this, mic, micToDmxc)
 
     val modules: List<Module> = listOf(
         executors, masters, macros, mainSwitches, globals, cuelists, beat, audio,
-        timecodes, commandLine, notifications, devices, presets, project, dmx, system, softdesk, stage
+        timecodes, commandLine, notifications, devices, presets, project, dmx, system, softdesk, stage, micFeatures
     )
 
     fun nextRequestId() = requestCounter.incrementAndGet().toString()

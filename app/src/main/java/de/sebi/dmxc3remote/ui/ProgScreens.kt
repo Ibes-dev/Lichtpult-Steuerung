@@ -140,7 +140,7 @@ private fun GroupRow(g: DeviceGroupDescriptor, selected: Boolean, onClick: () ->
 }
 
 @Composable
-private fun PropertyPane(
+internal fun PropertyPane(
     s: UmbraSession,
     group: DeviceGroupDescriptor?,
     presets: List<Pair<String, String>>,

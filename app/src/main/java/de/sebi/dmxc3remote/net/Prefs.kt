@@ -89,6 +89,15 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("beatHaptic", false)
         set(v) = sp.edit().putBoolean("beatHaptic", v).apply()
 
+    var micToDmxc: Boolean
+        get() = sp.getBoolean("micToDmxc", false)
+        set(v) = sp.edit().putBoolean("micToDmxc", v).apply()
+
+    /** Reihenfolge der Navigationsziele (Enum-Namen, kommagetrennt). */
+    var navOrder: String
+        get() = sp.getString("navOrder", "") ?: ""
+        set(v) = sp.edit().putString("navOrder", v).apply()
+
     var micAutoApply: Boolean
         get() = sp.getBoolean("micAutoApply", false)
         set(v) = sp.edit().putBoolean("micAutoApply", v).apply()

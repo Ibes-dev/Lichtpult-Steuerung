@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Brightness6
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Theaters
 import androidx.compose.material.icons.filled.Code
@@ -79,9 +81,17 @@ enum class Dest(val label: String, val icon: ImageVector) {
     MORE("Mehr", Icons.Filled.MoreHoriz)
 }
 
-/** Auf dem Handy direkt in der unteren Leiste, der Rest unter "Mehr". */
-private val PHONE_PRIMARY = listOf(Dest.EXEC, Dest.CUE, Dest.SOFT, Dest.PROG, Dest.MORE)
 private val ALL = Dest.entries.filter { it != Dest.MORE }
+
+/** Gespeicherte Reihenfolge anwenden; neue Ziele (nach Updates) hinten anhängen. */
+private fun orderOf(saved: String): List<Dest> {
+    val names = saved.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+    val known = names.mapNotNull { n -> ALL.firstOrNull { it.name == n } }
+    return known + ALL.filter { it !in known }
+}
+
+/** Auf dem Handy erscheinen die ersten vier unten, der Rest unter "Mehr". */
+private const val PHONE_SLOTS = 4
 
 @Composable
 fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, modifier: Modifier = Modifier) {
@@ -89,7 +99,10 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
     LaunchedEffect(session) {
         session.events.collect { ev -> snackbar.showSnackbar(ev.text) }
     }
-    var destName by rememberSaveable { mutableStateOf(Dest.EXEC.name) }
+    val orderStr by vm.navOrder.collectAsStateWithLifecycle()
+    val order = remember(orderStr) { orderOf(orderStr) }
+    val phonePrimary = remember(order) { order.take(PHONE_SLOTS) + Dest.MORE }
+    var destName by rememberSaveable { mutableStateOf(order.first().name) }
     val dest = Dest.valueOf(destName)
     val wide = isWide()
 
@@ -104,7 +117,7 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
                         windowInsets = WindowInsets(0, 0, 0, 0),
                         modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())
                     ) {
-                        ALL.forEach { d ->
+                        (order + Dest.MORE).forEach { d ->
                             NavigationRailItem(
                                 selected = dest == d,
                                 onClick = { destName = d.name },
@@ -116,13 +129,13 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
                     VerticalDivider(color = Desk.Line)
                 }
                 Box(Modifier.weight(1f).fillMaxSize()) {
-                    Content(dest, vm, session) { destName = it.name }
+                    Content(dest, vm, session, order) { destName = it.name }
                 }
             }
             if (!wide) {
                 NavigationBar(containerColor = Desk.Panel, windowInsets = WindowInsets(0, 0, 0, 0)) {
-                    PHONE_PRIMARY.forEach { d ->
-                        val selected = dest == d || (d == Dest.MORE && dest !in PHONE_PRIMARY)
+                    phonePrimary.forEach { d ->
+                        val selected = dest == d || (d == Dest.MORE && dest !in phonePrimary)
                         NavigationBarItem(
                             selected = selected,
                             onClick = { destName = d.name },
@@ -138,7 +151,7 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
 }
 
 @Composable
-private fun Content(dest: Dest, vm: AppViewModel, s: UmbraSession, navigate: (Dest) -> Unit) {
+private fun Content(dest: Dest, vm: AppViewModel, s: UmbraSession, order: List<Dest>, navigate: (Dest) -> Unit) {
     when (dest) {
         Dest.EXEC -> ExecutorScreen(s)
         Dest.CUE -> CuelistScreen(s, vm)
@@ -151,14 +164,15 @@ private fun Content(dest: Dest, vm: AppViewModel, s: UmbraSession, navigate: (De
         Dest.CONSOLE -> ConsoleScreen(s)
         Dest.SYSTEM -> SystemScreen(s, vm)
         Dest.DIAG -> DiagnosticsScreen(s)
-        Dest.MORE -> MoreScreen(navigate)
+        Dest.MORE -> MoreScreen(vm, order, navigate)
     }
 }
 
 @Composable
-private fun MoreScreen(navigate: (Dest) -> Unit) {
+private fun MoreScreen(vm: AppViewModel, order: List<Dest>, navigate: (Dest) -> Unit) {
+    var editing by remember { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(ALL.filter { it !in PHONE_PRIMARY }) { d ->
+        items(if (isWide()) order else order.drop(PHONE_SLOTS)) { d ->
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -172,7 +186,60 @@ private fun MoreScreen(navigate: (Dest) -> Unit) {
                 Text(d.label, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 16.dp))
             }
         }
+        item {
+            androidx.compose.material3.OutlinedButton(onClick = { editing = true }, modifier = Modifier.fillMaxWidth()) {
+                Text("Reihenfolge der Leiste anpassen")
+            }
+        }
     }
+    if (editing) NavOrderDialog(order, onDismiss = { editing = false }) { vm.setNavOrder(it.map { d -> d.name }); editing = false }
+}
+
+/** Reihenfolge per Pfeiltasten; die ersten vier stehen auf dem Handy in der unteren Leiste. */
+@Composable
+private fun NavOrderDialog(order: List<Dest>, onDismiss: () -> Unit, onSave: (List<Dest>) -> Unit) {
+    var list by remember { mutableStateOf(order) }
+    fun move(i: Int, d: Int) {
+        val j = i + d
+        if (j !in list.indices) return
+        list = list.toMutableList().also { val t = it[i]; it[i] = it[j]; it[j] = t }
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Leiste anpassen") },
+        text = {
+            Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "Handy: die ersten $PHONE_SLOTS stehen unten in der Leiste, der Rest unter Mehr. Tablet: Reihenfolge der Seitenleiste.",
+                    style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+                )
+                list.forEachIndexed { i, d ->
+                    if (i == PHONE_SLOTS) HorizontalDivider(Modifier.padding(vertical = 4.dp), color = Desk.Amber)
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(if (i < PHONE_SLOTS) Desk.Raised else Desk.Panel)
+                            .padding(start = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(d.icon, contentDescription = null, tint = if (i < PHONE_SLOTS) Desk.Amber else Desk.TextDim, modifier = Modifier.size(20.dp))
+                        Text(d.label, modifier = Modifier.weight(1f).padding(start = 10.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        IconButton(onClick = { move(i, -1) }, enabled = i > 0) {
+                            Icon(androidx.compose.material.icons.Icons.Filled.KeyboardArrowUp, contentDescription = "nach oben")
+                        }
+                        IconButton(onClick = { move(i, 1) }, enabled = i < list.lastIndex) {
+                            Icon(androidx.compose.material.icons.Icons.Filled.KeyboardArrowDown, contentDescription = "nach unten")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { onSave(list) }) { Text("Speichern") } },
+        dismissButton = {
+            Row {
+                androidx.compose.material3.TextButton(onClick = { list = ALL }) { Text("Standard") }
+                androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Abbrechen") }
+            }
+        }
+    )
 }
 
 @Composable
