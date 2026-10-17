@@ -11,3 +11,5 @@ app/src/main/proto/*
 !app/debug.keystore
 release.keystore
 keystore.properties
+download
+download
