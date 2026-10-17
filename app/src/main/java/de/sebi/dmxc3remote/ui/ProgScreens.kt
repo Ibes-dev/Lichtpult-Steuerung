@@ -58,6 +58,7 @@ import de.sebi.dmxc3remote.net.UmbraSession
 import de.sebi.dmxc3remote.net.boundCase
 import de.sebi.dmxc3remote.net.caption
 import de.sebi.dmxc3remote.net.colorMax
+import de.sebi.dmxc3remote.net.importance
 import de.sebi.dmxc3remote.net.kelvinRange
 import de.sebi.dmxc3remote.net.multiKeys
 import de.sebi.dmxc3remote.net.multiRange
