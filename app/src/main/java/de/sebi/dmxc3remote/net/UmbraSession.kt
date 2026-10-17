@@ -334,6 +334,8 @@ class UmbraSession(
     companion object {
         /** Aus Gradle: versionName inkl. CI-Run-Nummer, z. B. 0.3.0.17 */
         val APP_VERSION: String = de.sebi.dmxc3remote.BuildConfig.VERSION_NAME
+        /** Anzeigename aus Gradle (gradle.properties: appName). */
+        val APP_NAME: String = de.sebi.dmxc3remote.BuildConfig.APP_NAME
 
         fun buildProgramInfo(identity: ClientIdentity, netId: String): ClientProgramInfo {
             val clientInfo = ClientInfo.newBuilder()
@@ -346,7 +348,7 @@ class UmbraSession(
                 .setClientCapabilities(0)
                 .build()
             val program = ProgramInfo.newBuilder()
-                .setProgramName("DMXC3 Remote (Android)")
+                .setProgramName("$APP_NAME (Android)")
                 .setVendor("private")
                 .setProgramVersion(APP_VERSION)
                 .setBuildDate(System.currentTimeMillis())

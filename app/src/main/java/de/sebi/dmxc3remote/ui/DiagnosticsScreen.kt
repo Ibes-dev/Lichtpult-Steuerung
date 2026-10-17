@@ -116,11 +116,11 @@ fun DiagnosticsScreen(s: UmbraSession) {
                 Switch(checked = raw, onCheckedChange = { Diag.captureRaw.value = it })
             }) {
                 OutlinedButton(onClick = {
-                    val text = Diag.report("DMXC3 Remote ${UmbraSession.APP_VERSION}, Server ${s.target.host}:${s.target.port}\n" + results.joinToString("\n"))
+                    val text = Diag.report("${UmbraSession.APP_NAME} ${UmbraSession.APP_VERSION}, Server ${s.target.host}:${s.target.port}\n" + results.joinToString("\n"))
                     ctx.startActivity(
                         Intent.createChooser(
                             Intent(Intent.ACTION_SEND).setType("text/plain")
-                                .putExtra(Intent.EXTRA_SUBJECT, "DMXC3 Remote Diagnose")
+                                .putExtra(Intent.EXTRA_SUBJECT, "${UmbraSession.APP_NAME} Diagnose")
                                 .putExtra(Intent.EXTRA_TEXT, text),
                             "Diagnose teilen"
                         )

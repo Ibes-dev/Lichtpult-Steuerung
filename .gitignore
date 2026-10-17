@@ -5,3 +5,9 @@ local.properties
 *.iml
 app/src/main/proto/*
 !app/src/main/proto/.gitkeep
+
+# Release-Schlüssel nie einchecken
+*.jks
+!app/debug.keystore
+release.keystore
+keystore.properties

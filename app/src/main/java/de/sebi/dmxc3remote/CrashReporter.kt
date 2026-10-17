@@ -21,7 +21,7 @@ object CrashReporter {
                 val sw = StringWriter()
                 e.printStackTrace(PrintWriter(sw))
                 file(app).writeText(
-                    "DMXC3 Remote ${de.sebi.dmxc3remote.net.UmbraSession.APP_VERSION}\n" +
+                    "${de.sebi.dmxc3remote.net.UmbraSession.APP_NAME} ${de.sebi.dmxc3remote.net.UmbraSession.APP_VERSION}\n" +
                         "Android ${android.os.Build.VERSION.RELEASE} / ${android.os.Build.MODEL}\n" +
                         "Thread: ${thread.name}\n\n$sw"
                 )

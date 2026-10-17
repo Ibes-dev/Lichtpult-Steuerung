@@ -1,0 +1,6 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- drei Faderbahnen mit bernsteinfarbenen Kappen, Pult-Optik -->
+    <path android:fillColor="#3A3F47" android:pathData="M37,34h4v40h-4z M52,34h4v40h-4z M67,34h4v40h-4z"/>
+    <path android:fillColor="#F2A93B" android:pathData="M32,58h14v8h-14z M47,42h14v8h-14z M62,50h14v8h-14z"/>
+</vector>

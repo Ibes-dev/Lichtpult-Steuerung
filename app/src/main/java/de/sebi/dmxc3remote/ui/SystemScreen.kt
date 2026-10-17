@@ -44,7 +44,7 @@ fun SystemScreen(s: UmbraSession, vm: AppViewModel) {
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            listOf("Projekt", "DMX-Ausgabe", "Hardware", "Steuerung").forEachIndexed { i, t ->
+            listOf("Projekt", "DMX-Ausgabe", "Hardware", "Steuerung", "Info").forEachIndexed { i, t ->
                 androidx.compose.material3.FilterChip(selected = i == section, onClick = { section = i }, label = { Text(t) })
             }
         }
@@ -52,7 +52,8 @@ fun SystemScreen(s: UmbraSession, vm: AppViewModel) {
             0 -> Overview(s)
             1 -> DmxMonitor(s)
             2 -> Hardware(s)
-            else -> ControlSettings(s, vm)
+            3 -> ControlSettings(s, vm)
+            else -> AboutScreen()
         }
     }
 }
@@ -270,6 +271,62 @@ private fun ControlSettings(s: UmbraSession, vm: AppViewModel) {
                 style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
             )
             last?.let { Text("Zuletzt empfangen: ${if (it.kind == 'N') "Note" else "CC"} ${it.number}, Kanal ${it.channel + 1}, Wert ${it.value}", style = MaterialTheme.typography.bodySmall.merge(Numeric)) }
+        }
+    }
+}
+
+/** Über die App: Version, Haftungsausschluss, Lizenzen. */
+@Composable
+private fun AboutScreen() {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Section(UmbraSession.APP_NAME) {
+            Text("Version ${UmbraSession.APP_VERSION}")
+            Text(
+                "Inoffizielle Fernsteuerung für DMXControl 3 über dessen Netzwerkschnittstelle. " +
+                    "Kein Produkt des DMXControl Projects e.V. und nicht von ihm unterstützt.",
+                style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+            )
+        }
+        Section("Haftungsausschluss") {
+            Text(
+                "Nutzung auf eigene Verantwortung und ohne Gewähr. Die App schaltet Licht, löst Blackout aus und kann " +
+                    "Bühnenansichten in DMXControl ändern oder löschen. Vor Auftritten testen. Die Verbindung zu " +
+                    "DMXControl ist unverschlüsselt; nur in vertrauenswürdigen Netzen verwenden.",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        Section("Datenschutz") {
+            Text(
+                "Die App sendet Daten nur an den gewählten DMXControl-Rechner im lokalen Netz. Das Mikrofon wird nur " +
+                    "bei eingeschalteter Tempo-/Stimmungserkennung genutzt und lokal ausgewertet; es werden keine " +
+                    "Aufnahmen gespeichert oder übertragen, nur die berechneten Werte (z. B. BPM, Stimmung) an DMXControl.",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        Section("Lizenzen") {
+            listOf(
+                "Eigener Quellcode" to "CC0 1.0 (gemeinfrei)",
+                "DMXControl3 Network Interface (Protokolldefinitionen)" to "Nutzung mit Zustimmung des DMXControl-Projektteams",
+                "gRPC Java / gRPC Kotlin" to "Apache License 2.0",
+                "Protocol Buffers (protobuf-javalite)" to "BSD 3-Clause",
+                "Kotlin, kotlinx.coroutines" to "Apache License 2.0",
+                "AndroidX, Jetpack Compose, Material 3, Material Icons" to "Apache License 2.0",
+                "OkHttp (über grpc-okhttp)" to "Apache License 2.0",
+                "Gradle Wrapper" to "Apache License 2.0"
+            ).forEach { (name, lic) ->
+                Column {
+                    Text(name, style = MaterialTheme.typography.bodyMedium)
+                    Text(lic, style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+                }
+            }
+            Text(
+                "Lizenztexte: apache.org/licenses/LICENSE-2.0, opensource.org/license/bsd-3-clause, " +
+                    "creativecommons.org/publicdomain/zero/1.0",
+                style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+            )
         }
     }
 }

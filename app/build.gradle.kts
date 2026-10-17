@@ -7,6 +7,7 @@ plugins {
     id("com.google.protobuf")
 }
 
+val appName = (project.findProperty("appName") as String?)?.trim()?.ifBlank { null } ?: "Lichtpult Remote"
 val buildNumber = (project.findProperty("buildNumber") as String?)?.toIntOrNull() ?: 1
 val keystoreFile = System.getenv("KEYSTORE_FILE")?.takeIf { it.isNotBlank() && file(it).exists() }
 
@@ -23,7 +24,9 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = buildNumber
-        versionName = "0.5.0.$buildNumber"
+        versionName = "1.0.0"
+        resValue("string", "app_name", appName)
+        buildConfigField("String", "APP_NAME", "\"$appName\"")
     }
 
     signingConfigs {

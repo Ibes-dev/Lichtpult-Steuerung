@@ -57,7 +57,7 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
 
     /** Kopierbarer Diagnosebericht inkl. Version, Runtime-ID und lokaler Element-IDs. */
     fun diagReport(): String = buildString {
-        appendLine("DMXC3 Remote ${UmbraSession.APP_VERSION}")
+        appendLine("${UmbraSession.APP_NAME} ${UmbraSession.APP_VERSION}")
         appendLine("Runtime-ID: ${s.runtimeId}")
         appendLine("Server: ${_serverCounts.value?.let { "${it.first} Eingänge, ${it.second} Ausgänge" } ?: "unbestätigt"}")
         val c = _diagCounts.value

@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "DMXC3Remote"
+rootProject.name = "LichtpultRemote"
 include(":app")
