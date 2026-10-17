@@ -117,27 +117,51 @@ class StageModule(s: UmbraSession) : Module(s, "Bühnenansicht") {
                     s.headers
                 )
                 val next = HashMap(_live.value)
+                val cases = HashMap<String, Int>()
                 resp.responsesList.forEachIndexed { i, r ->
-                    val (id, isColor, p) = map[i] ?: return@forEachIndexed
-                    val v = dpvOf(r) ?: return@forEachIndexed
+                    val v = dpvOf(r)
+                    val caseName = v?.valueCase?.name ?: r.pvCase.name
+                    cases[caseName] = (cases[caseName] ?: 0) + 1
+                    if (v == null) return@forEachIndexed
+                    // Zuordnung bevorzugt über die IDs in der Antwort, sonst über die Reihenfolge
+                    val byId = map.values.firstOrNull { it.first == v.deviceId && it.third.id == v.propertyId }
+                    val (id, isColor, p) = byId ?: map[i] ?: return@forEachIndexed
                     val cur = next[id] ?: LiveOut(null, 1f, 1f, 1f, false)
-                    next[id] = if (isColor && v.valueCase == DevicePropertyValue.ValueCase.COLOR) {
-                        val c = v.color
-                        if (c.hasVisualizationColor()) cur.copy(r = c.visualizationColor.r / 255f, g = c.visualizationColor.g / 255f, b = c.visualizationColor.b / 255f, hasColor = true)
-                        else if (c.hasCalculatedColor()) cur.copy(r = c.calculatedColor.r / 255f, g = c.calculatedColor.g / 255f, b = c.calculatedColor.b / 255f, hasColor = true)
-                        else {
-                            val mx = p.colorMax().toFloat()
-                            cur.copy(r = (c.r / mx).toFloat(), g = (c.g / mx).toFloat(), b = (c.b / mx).toFloat(), hasColor = true)
-                        }
+                    if (isColor && v.valueCase == DevicePropertyValue.ValueCase.COLOR) {
+                        colorOf(v.color, p)?.let { (cr, cg, cb) -> next[id] = cur.copy(r = cr, g = cg, b = cb, hasColor = true) }
                     } else if (!isColor && v.valueCase == DevicePropertyValue.ValueCase.DOUBLEVALUE) {
                         val rg = p.doubleRange()
-                        cur.copy(intensity = ((v.doubleValue - rg.start) / (rg.endInclusive - rg.start)).toFloat().coerceIn(0f, 1f))
-                    } else cur
+                        next[id] = cur.copy(intensity = ((v.doubleValue - rg.start) / (rg.endInclusive - rg.start)).toFloat().coerceIn(0f, 1f))
+                    }
                 }
                 _live.value = next
+                // einmal je Ansicht protokollieren, was der Server liefert (Diagnose-Export)
+                val sig = ids.hashCode()
+                if (sig != loggedFor) {
+                    loggedFor = sig
+                    Diag.note("Bühne live: ${reqs.size} Abfragen, Antworten: " + cases.entries.joinToString { "${it.key}=${it.value}" })
+                }
             }
             delay(400)
         }
+    }
+
+    private var loggedFor = 0
+
+    /**
+     * Anzeigefarbe aus LumosColorData: erste nicht schwarze Quelle aus
+     * Visualisierungsfarbe, berechneter Farbe, RGB-Werten oder gewähltem Farbrad-Eintrag.
+     */
+    private fun colorOf(c: LumosProtobuf.ValueTypes.LumosColorData, p: DevicePropertyDescriptor): Triple<Float, Float, Float>? {
+        fun cd(x: LumosProtobuf.ValueTypes.ColorData) = Triple(x.r / 255f, x.g / 255f, x.b / 255f)
+        val candidates = ArrayList<Triple<Float, Float, Float>>()
+        if (c.hasVisualizationColor()) candidates += cd(c.visualizationColor)
+        if (c.hasCalculatedColor()) candidates += cd(c.calculatedColor)
+        val mx = p.colorMax().toFloat()
+        candidates += Triple((c.r / mx).toFloat(), (c.g / mx).toFloat(), (c.b / mx).toFloat())
+        c.colorwheelMap.values.firstOrNull { it.hasColor() }?.let { candidates += cd(it.color) }
+        return candidates.firstOrNull { it.first + it.second + it.third > 0.02f }
+            ?: candidates.firstOrNull()?.takeIf { c.hasVisualizationColor() || c.hasCalculatedColor() }
     }
 
     private fun dpvOf(r: DevicePropertyValueResponse): DevicePropertyValue? = when (r.pvCase) {

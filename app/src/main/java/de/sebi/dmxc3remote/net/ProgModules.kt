@@ -198,6 +198,8 @@ fun DevicePropertyDescriptor.colorMax(): Double {
     return if (m > 1.0) m else 1.0
 }
 
+private const val MULTI = "DEVICES:"
+
 class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
     private val stub = DeviceClientCoroutineStub(s.channel)
     private val progStub = ProgrammerClientCoroutineStub(s.channel)
@@ -269,10 +271,11 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
 
     private suspend fun readOne(groupId: String, propertyId: String) {
         val key = "$groupId:$propertyId"
+        val target = if (isMulti(groupId)) devicesOf(groupId).firstOrNull() ?: return else groupId
         val r = runCatching {
             progStub.dl(5).getProgrammerValue(
                 DevicePropertyValueRequest.newBuilder()
-                    .setDeviceOrGroupId(groupId)
+                    .setDeviceOrGroupId(target)
                     .setPropertyId(propertyId)
                     .setUserContextId(s.userContextId)
                     .setType(EValueType.PROGRAMMER)
@@ -356,8 +359,23 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
         }.getOrNull()
         val gid = ctx?.selectedDeviceGroup?.ifBlank { null }
             ?: ids.singleOrNull()?.takeIf { _groups.value.containsKey(it) }
-        refreshSelection(gid)
-        if (gid == null) s.emit("DMXControl meldet keine Auswahlgruppe; Werte lassen sich nur über Gruppen setzen", isError = true)
+        if (gid != null) {
+            refreshSelection(gid)
+        } else {
+            // Keine Gruppe von DMXControl: Eigenschaften des ersten Geräts, Werte gehen an jedes Gerät einzeln
+            val devs = runCatching {
+                stub.dl(10).getDevices(s.getMultiple(ids), s.headers).devicesList
+            }.getOrDefault(emptyList())
+            val props = devs.firstOrNull()?.beamsList?.flatMap { it.propertiesList } ?: emptyList()
+            val synthetic = DeviceGroupDescriptor.newBuilder()
+                .setId(MULTI + ids.joinToString(","))
+                .setName(if (ids.size == 1) devs.firstOrNull()?.name ?: "1 Gerät" else "${ids.size} Geräte")
+                .addAllProperties(props)
+                .build()
+            _selectionGroup.value = synthetic
+            selectedGroup = synthetic.id
+            props.forEach { p -> readOne(synthetic.id, p.id) }
+        }
     }
 
     /** Effekt auf eine Eigenschaft der Gruppe legen. UNVERIFIZIERT: Attachable wird so übergeben, wie GetAttachables es liefert. */
@@ -417,7 +435,26 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
             readOne(groupId, p.id)
         }
 
+    /** Kennung einer Auswahl einzelner Geräte ohne Gruppe von DMXControl. */
+    private fun isMulti(id: String) = id.startsWith(MULTI)
+    private fun devicesOf(id: String) = id.removePrefix(MULTI).split(',').filter { it.isNotBlank() }
+
     private suspend fun setValue(groupId: String, propertyId: String, value: DevicePropertyValue) {
+        if (isMulti(groupId)) {
+            // UNVERIFIZIERT: Programmer-Wert je Gerät, Geräte-ID im Feld groupId
+            devicesOf(groupId).forEach { dev ->
+                progStub.dl(3).setProgrammerValue(
+                    SetProgrammerValueRequest.newBuilder()
+                        .setGroupId(dev)
+                        .setPropertyId(propertyId)
+                        .setUserContextId(s.userContextId)
+                        .setDpv(value.toBuilder().setDeviceId(dev).build())
+                        .build(),
+                    s.headers
+                )
+            }
+            return
+        }
         progStub.dl(3).setProgrammerValue(
             SetProgrammerValueRequest.newBuilder()
                 .setGroupId(groupId)
