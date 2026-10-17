@@ -1,9 +1,0 @@
-cd ~
-rm -rf DMXC3Remote
-unzip -o ~/storage/downloads/DMXC3Remote.zip -d ~
-cp -a ~/DMXC3Remote/. ~/dmxcontrol3-android/
-cd ~/dmxcontrol3-android
-git update-index --chmod=+x setup-protos.sh gradlew
-git add -A
-git commit -m "Update aus DMXC3Remote.zip"
-git push
