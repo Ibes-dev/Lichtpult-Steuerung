@@ -2,6 +2,7 @@ package de.sebi.dmxc3remote.ui
 
 import LumosProtobuf.ProjectServiceTypes.EProjectState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,7 +40,10 @@ import de.sebi.dmxc3remote.net.UmbraSession
 fun SystemScreen(s: UmbraSession, vm: AppViewModel) {
     var section by rememberSaveable { mutableStateOf(0) }
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             listOf("Projekt", "DMX-Ausgabe", "Hardware", "Steuerung").forEachIndexed { i, t ->
                 androidx.compose.material3.FilterChip(selected = i == section, onClick = { section = i }, label = { Text(t) })
             }
@@ -112,6 +116,7 @@ private fun DmxMonitor(s: UmbraSession) {
     val universe by m.universe.collectAsStateWithLifecycle()
     val values by m.values.collectAsStateWithLifecycle()
     val err by m.error.collectAsStateWithLifecycle()
+    val info by m.info.collectAsStateWithLifecycle()
     DisposableEffect(Unit) {
         m.setActive(true)
         onDispose { m.setActive(false) }
@@ -123,6 +128,7 @@ private fun DmxMonitor(s: UmbraSession) {
             Text("Universum $universe", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 8.dp))
             TextButton(onClick = { m.setUniverse(universe + 1) }) { Text("▶") }
         }
+        if (info.isNotBlank()) Text(info, style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, modifier = Modifier.padding(horizontal = 8.dp))
         Column(Modifier.verticalScroll(rememberScrollState())) {
             (0 until 512).chunked(16).forEach { row ->
                 Row(Modifier.fillMaxWidth()) {

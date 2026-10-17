@@ -38,6 +38,8 @@ import de.sebi.dmxc3remote.net.UmbraTarget
 @Composable
 fun ConnectScreen(vm: AppViewModel, conn: ConnState, modifier: Modifier = Modifier) {
     val discovered by vm.discovered.collectAsStateWithLifecycle()
+    val info by vm.info.collectAsStateWithLifecycle()
+    val needsAdmission by vm.needsAdmission.collectAsStateWithLifecycle()
     val profiles by vm.profiles.collectAsStateWithLifecycle()
     val autoConnect by vm.autoConnect.collectAsStateWithLifecycle()
     var profileName by remember { mutableStateOf("") }
@@ -78,6 +80,12 @@ fun ConnectScreen(vm: AppViewModel, conn: ConnState, modifier: Modifier = Modifi
                 }
             }
             else -> Unit
+        }
+        info?.let {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(it, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                TextButton(onClick = vm::clearError) { Text("OK") }
+            }
         }
         error?.let {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -124,14 +132,26 @@ fun ConnectScreen(vm: AppViewModel, conn: ConnState, modifier: Modifier = Modifi
                 }
             ) {
                 Column(Modifier.padding(12.dp)) {
-                    Text(d.clientName.ifBlank { d.hostname }, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        d.clientName.takeIf { it.isNotBlank() && it != "DefaultUnknownServerName" } ?: d.hostname.ifBlank { d.host },
+                        style = MaterialTheme.typography.titleSmall
+                    )
                     Text("${d.host}:${d.port}  ·  ${d.hostname}", style = MaterialTheme.typography.bodySmall)
                     if (d.projectName.isNotBlank()) Text("Projekt: ${d.projectName}", style = MaterialTheme.typography.bodySmall)
                     Text("NetID: ${d.netId}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                    TextButton(onClick = {
-                        persistIdentity()
-                        vm.requestAdmission(d)
-                    }) { Text("Freigabe anfragen") }
+                    // Freigabe nur anbieten, wenn eine Anmeldung bei diesem Server abgelehnt wurde
+                    if (d.host in needsAdmission) {
+                        Text(
+                            "Anmeldung wurde abgelehnt. DMXControl muss diesen Client erst zulassen.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error
+                        )
+                        TextButton(onClick = {
+                            persistIdentity()
+                            vm.requestAdmission(d)
+                        }) { Text("Freigabe anfragen") }
+                    } else {
+                        Text("Antippen zum Verbinden", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }

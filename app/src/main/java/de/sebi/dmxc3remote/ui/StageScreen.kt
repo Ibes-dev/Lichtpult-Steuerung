@@ -181,7 +181,7 @@ fun StageScreen(s: UmbraSession) {
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                     if (selected.isNotEmpty()) {
-                        PropertyPane(s, selGroup, presets.values.sortedBy { it.name }.map { it.presetId to it.name }, presetErr, Modifier.fillMaxSize())
+                        PropertyPane(s, selGroup, presets.values.sortedBy { it.name }.map { it.presetId to it.name }, presetErr, Modifier.fillMaxSize(), compact = true)
                     }
                 }
             }

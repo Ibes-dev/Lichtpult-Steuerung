@@ -53,6 +53,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _discovered = MutableStateFlow<Map<String, DiscoveredUmbra>>(emptyMap())
     val discovered: StateFlow<Map<String, DiscoveredUmbra>> = _discovered.asStateFlow()
 
+    private val _info = MutableStateFlow<String?>(null)
+    val info: StateFlow<String?> = _info.asStateFlow()
+
+    /** Server, die eine Anmeldung abgelehnt haben -> dort "Freigabe anfragen" anbieten. */
+    private val _needsAdmission = MutableStateFlow<Set<String>>(emptySet())
+    val needsAdmission: StateFlow<Set<String>> = _needsAdmission.asStateFlow()
+
     private val _lastError = MutableStateFlow<String?>(null)
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
 
@@ -295,6 +302,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     throw e
                 } catch (e: Throwable) {
                     failure = e.describe()
+                    if (failure.contains("abgelehnt") || failure.contains("verweigert") || failure.contains("NetID")) {
+                        _needsAdmission.update { it + target.host }
+                    }
                 } finally {
                     _session.value = null
                     SessionHolder.session.value = null
@@ -326,10 +336,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val r = informClientExists(d.host, d.port, identity())
                 r.clientName?.let { prefs.clientName = it }
                 if (r.netId != null) {
-                    _lastError.value = "Freigabe erhalten – NetID ${r.netId}"
+                    _info.value = "Freigabe erhalten, NetID ${r.netId}"
+                    _needsAdmission.update { it - d.host }
                     connect(UmbraTarget(d.host, d.port, r.netId, d.clientName.ifBlank { d.host }))
                 } else {
-                    _lastError.value = "Angemeldet bei ${r.umbraName ?: d.host}. In der DMXC3-GUI unter Netzwerk dem Netzwerk zuweisen, dann erneut anfragen."
+                    _info.value = "Anfrage an ${r.umbraName?.takeIf { it != "DefaultUnknownServerName" } ?: d.host} gesendet. " +
+                        "In DMXControl unter Netzwerk den Client \"${prefs.clientName}\" dem Netzwerk zuweisen und hier erneut anfragen."
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -341,5 +353,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearError() {
         _lastError.value = null
+        _info.value = null
     }
 }

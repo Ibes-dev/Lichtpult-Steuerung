@@ -27,7 +27,9 @@ data class DiscoveredUmbra(
     val seenAt: Long
 ) {
     val key get() = "$host:$port"
-    fun toTarget() = UmbraTarget(host, port, netId, clientName.ifBlank { hostname.ifBlank { host } })
+    /** DMXControl meldet ohne eigenen Servernamen "DefaultUnknownServerName"; dann den PC-Namen zeigen. */
+    val displayName get() = clientName.takeIf { it.isNotBlank() && it != "DefaultUnknownServerName" } ?: hostname.ifBlank { host }
+    fun toTarget() = UmbraTarget(host, port, netId, displayName)
 }
 
 /**

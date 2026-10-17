@@ -151,8 +151,21 @@ internal fun PropertyPane(
     group: DeviceGroupDescriptor?,
     presets: List<Pair<String, String>>,
     presetErr: String?,
-    modifier: Modifier
+    modifier: Modifier,
+    compact: Boolean = false
 ) {
+    val progValues by s.devices.progValues.collectAsStateWithLifecycle()
+    val fannedMap by s.devices.progFanned.collectAsStateWithLifecycle()
+    var showAll by remember(group?.id) { mutableStateOf(false) }
+    // Kompakt: nur wichtige Funktionen, sortiert wie am Pult
+    val props = remember(group, progValues, fannedMap, compact, showAll) {
+        val list = group?.propertiesList ?: emptyList()
+        if (!compact || showAll) list
+        else list.mapNotNull { p ->
+            val k = p.kind(serverValue(group!!.id, p, progValues, fannedMap)?.valueCase)
+            p.importance(k)?.let { it to p }
+        }.sortedBy { it.first }.map { it.second }
+    }
     LazyColumn(
         modifier,
         contentPadding = PaddingValues(10.dp),
@@ -167,7 +180,12 @@ internal fun PropertyPane(
                 )
             }
         } else {
-            items(group.propertiesList) { p -> PropertyControl(s, group, p) }
+            items(props) { p -> PropertyControl(s, group, p, compact && !showAll) }
+            if (compact) item {
+                androidx.compose.material3.TextButton(onClick = { showAll = !showAll }) {
+                    Text(if (showAll) "Nur wichtige Funktionen" else "Alle ${group.propertiesCount} Funktionen anzeigen")
+                }
+            }
         }
         item {
             Section(if (group != null) "Presets für ${group.name}" else "Presets", error = presetErr) {
@@ -202,16 +220,17 @@ private fun PresetGrid(items: List<Pair<String, String>>, onClick: (String) -> U
 private val localValues = mutableStateMapOf<String, List<Float>>()
 
 @Composable
-private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePropertyDescriptor) {
+private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePropertyDescriptor, compact: Boolean = false) {
     val key = "${g.id}:${p.id}"
     val dm = s.devices
     val label = p.displayName.ifBlank { p.name.ifBlank { p.id } }
     val progValues by dm.progValues.collectAsStateWithLifecycle()
     val fannedMap by dm.progFanned.collectAsStateWithLifecycle()
     val appliedMap by dm.applied.collectAsStateWithLifecycle()
-    val server = progValues[key]
+    val server = serverValue(g.id, p, progValues, fannedMap)
+    val kind = p.kind(server?.valueCase)
     // Rücklesen: Wert aus dem DMXControl-Programmer übernehmen (auch Änderungen vom PC)
-    LaunchedEffect(server) { server?.let { v -> fromServer(v, p)?.let { localValues[key] = it } } }
+    LaunchedEffect(server) { server?.let { v -> fromServer(v, p, kind)?.let { localValues[key] = it } } }
     var effectDialog by remember { mutableStateOf(false) }
     var fanOpen by remember { mutableStateOf(false) }
     Column(
@@ -219,7 +238,7 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         run {
-            when (p.kind()) {
+            when (kind) {
                 PropKind.DOUBLE -> {
                     val range = p.doubleRange()
                     val v = localValues[key]?.firstOrNull() ?: range.start.toFloat()
@@ -372,35 +391,50 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
             }
         }
         val fanned = fannedMap[key]
-        Text(
+        // "gefächert" nur, wenn die Geräte wirklich unterschiedliche Werte haben
+        val reallyFanned = fanned != null && fanned.fannedValuesList.map { it.toByteString() }.distinct().size > 1
+        if (!compact || server != null) Text(
             when {
-                fanned != null -> "Im Programmer gefächert: " + fanned.fannedValuesList.joinToString(" … ") {
-                    if (it.valueCase == LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.DOUBLEVALUE) "%.2f".format(it.doubleValue) else it.valueCase.name
-                }
-                server != null -> "Im Programmer gesetzt"
+                reallyFanned -> "Im Programmer gefächert" + fanned!!.fannedValuesList.takeIf { l ->
+                    l.all { it.valueCase == LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.DOUBLEVALUE }
+                }?.let { l -> ": " + l.joinToString(" … ") { "%.2f".format(it.doubleValue) } }.orEmpty()
+                server != null -> "Im Programmer"
                 else -> "Nicht im Programmer"
             },
             style = MaterialTheme.typography.labelSmall,
-            color = if (server != null || fanned != null) Desk.Amber else Desk.TextDim
+            color = if (server != null) Desk.Amber else Desk.TextDim
         )
-        if (p.kind() != PropKind.UNSUPPORTED) {
+        if (!compact && kind != PropKind.UNSUPPORTED) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 androidx.compose.material3.TextButton(onClick = { effectDialog = true }) { Text("Effekt …") }
                 if (!appliedMap[key].isNullOrEmpty()) {
                     androidx.compose.material3.TextButton(onClick = { dm.removeEffects(g.id, p.id) }) { Text("Effekte entfernen") }
                 }
-                if (p.kind() == PropKind.DOUBLE) {
+                if (kind == PropKind.DOUBLE) {
                     androidx.compose.material3.TextButton(onClick = { fanOpen = !fanOpen }) { Text(if (fanOpen) "Fächern schließen" else "Fächern") }
                 }
             }
         }
-        if (fanOpen && p.kind() == PropKind.DOUBLE) FanControl(s, g, p)
+        if (fanOpen && kind == PropKind.DOUBLE) FanControl(s, g, p)
     }
     if (effectDialog) EffectDialog(s, g, p) { effectDialog = false }
 }
 
 /** Server-Wert in die lokale Darstellung (normiert wie die Bedienelemente) umrechnen. */
-private fun fromServer(v: LumosProtobuf.DeviceServiceTypes.DevicePropertyValue, p: DevicePropertyDescriptor): List<Float>? {
+/** Programmer-Wert: direkter Wert, sonst erster gefächerter Wert (bei Gruppen meldet DMXControl je Gerät). */
+private fun serverValue(
+    groupId: String,
+    p: DevicePropertyDescriptor,
+    values: Map<String, LumosProtobuf.DeviceServiceTypes.DevicePropertyValue>,
+    fanned: Map<String, LumosProtobuf.DeviceServiceTypes.FannedPropertyValue>
+): LumosProtobuf.DeviceServiceTypes.DevicePropertyValue? {
+    val key = "$groupId:${p.id}"
+    return values[key] ?: fanned[key]?.fannedValuesList?.firstOrNull {
+        it.valueCase != LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.VALUE_NOT_SET
+    }
+}
+
+private fun fromServer(v: LumosProtobuf.DeviceServiceTypes.DevicePropertyValue, p: DevicePropertyDescriptor, kind: PropKind): List<Float>? {
     return when (v.valueCase) {
         LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.DOUBLEVALUE -> listOf(v.doubleValue.toFloat())
         LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.COLOR -> {
@@ -421,8 +455,8 @@ private fun fromServer(v: LumosProtobuf.DeviceServiceTypes.DevicePropertyValue, 
         else -> null
     }?.let { list ->
         // Aufzählung: gewählten Eintrag über die Beschriftung wiederfinden
-        if (p.kind() != PropKind.ENUM) list else null
-    } ?: if (p.kind() == PropKind.ENUM) enumIndexOf(v, p)?.let { listOf(it.toFloat()) } else null
+        if (kind != PropKind.ENUM) list else null
+    } ?: if (kind == PropKind.ENUM) enumIndexOf(v, p)?.let { listOf(it.toFloat()) } else null
 }
 
 private fun enumIndexOf(v: LumosProtobuf.DeviceServiceTypes.DevicePropertyValue, p: DevicePropertyDescriptor): Int? {

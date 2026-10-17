@@ -110,9 +110,18 @@ class DmxModule(s: UmbraSession) : Module(s, "DMX-Monitor") {
         _values.value = IntArray(512)
     }
 
+    /** Kurzinfo zur letzten Antwort (Diagnose im Monitor). */
+    private val _info = MutableStateFlow("")
+    val info: StateFlow<String> = _info.asStateFlow()
+
+    /** 0 = dmxOutStart/Stop als absolute Kanäle (1-n), 1 = als Universen (1-n). Wird automatisch erkannt. */
+    @Volatile private var mode = 0
+
     /**
      * Polling nur bei sichtbarem Monitor (200 ms).
-     * UNVERIFIZIERT: dmxOutStart/Stop als absolute, 0-basierte Kanalnummern über alle Universen.
+     * Laut Proto sind dmxOutStart/Stop 1-basiert ("1-n"); ob Kanal oder Universum gemeint ist, steht dort nicht.
+     * Die App fragt zuerst Kanäle ((u-1)*512+1 … u*512) ab und schaltet auf Universen um,
+     * wenn die Antwort nicht 512 Werte bzw. keine Kanalnummern enthält.
      */
     override suspend fun stream() {
         while (true) {
@@ -121,25 +130,41 @@ class DmxModule(s: UmbraSession) : Module(s, "DMX-Monitor") {
                 continue
             }
             val u = _universe.value
-            val start = (u - 1) * 512
+            val firstCh = (u - 1) * 512 + 1
+            val (start, stop) = if (mode == 0) firstCh to firstCh + 511 else u to u
             val r = stub.dl(3).getDmxValues(
                 GetDMXRequest.newBuilder()
                     .setRequestId(s.nextRequestId())
                     .setDmxOutStart(start)
-                    .setDmxOutStop(start + 511)
+                    .setDmxOutStop(stop)
                     .build(),
                 s.headers
             )
             val bytes = r.dmxValues.toByteArray()
+            val chans = r.dmxChannelsList
             val out = IntArray(512)
-            if (r.dmxChannelsCount == bytes.size && bytes.isNotEmpty()) {
-                r.dmxChannelsList.forEachIndexed { i, ch ->
-                    val idx = ch - start
+            when {
+                chans.size == bytes.size && bytes.isNotEmpty() -> chans.forEachIndexed { i, ch ->
+                    // Kanalnummern absolut (1-n) oder universumsbezogen
+                    val idx = when {
+                        ch in firstCh..firstCh + 511 -> ch - firstCh
+                        ch in 1..512 -> ch - 1
+                        ch in 0..511 -> ch
+                        else -> -1
+                    }
                     if (idx in 0 until 512) out[idx] = bytes[i].toInt() and 0xFF
                 }
-            } else {
-                for (i in 0 until minOf(512, bytes.size)) out[i] = bytes[i].toInt() and 0xFF
+                bytes.size >= 512 -> {
+                    // Universums-Block(e): das gewünschte Universum ist der erste Block der Antwort
+                    for (i in 0 until 512) out[i] = bytes[i].toInt() and 0xFF
+                }
+                else -> for (i in bytes.indices.take(512)) out[i] = bytes[i].toInt() and 0xFF
             }
+            _info.value = "Anfrage ${if (mode == 0) "Kanäle" else "Universum"} $start–$stop: " +
+                "${bytes.size} Werte, ${chans.size} Kanalnummern" + (chans.firstOrNull()?.let { ", erste Nr. $it" } ?: "")
+            // Automatische Erkennung: Kanalmodus liefert nichts Brauchbares -> Universumsmodus probieren
+            if (mode == 0 && bytes.isEmpty()) mode = 1
+            else if (mode == 1 && bytes.isEmpty()) mode = 0
             if (u == _universe.value) _values.value = out
             delay(200)
         }

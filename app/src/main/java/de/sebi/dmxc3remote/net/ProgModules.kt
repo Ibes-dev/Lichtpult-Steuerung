@@ -117,10 +117,30 @@ fun DevicePropertyDescriptor.boundCase(): DevicePropertyValue.ValueCase? = when 
     else -> null
 }
 
-fun DevicePropertyDescriptor.kind(): PropKind {
+/** Name der Eigenschaft in Kleinbuchstaben (ID, Name, Anzeigename, Typ) für Heuristiken. */
+private fun DevicePropertyDescriptor.words() =
+    listOf(id, name, displayName, type.name, devicePropertyTypeAQ.substringBefore(',')).joinToString(" ").lowercase()
+
+/** Wertart aus einem bereits bekannten Wert (Programmer-Rücklesen) oder aus dem Typnamen. */
+private fun DevicePropertyDescriptor.inferCase(hint: DevicePropertyValue.ValueCase?): DevicePropertyValue.ValueCase? {
+    if (hint != null && hint != DevicePropertyValue.ValueCase.VALUE_NOT_SET && hint != DevicePropertyValue.ValueCase.FALLBACK) return hint
+    val t = (type.name + " " + devicePropertyTypeAQ.substringBefore(',')).lowercase()
+    return when {
+        "colortype" in t || t.endsWith("color") || "rgb" in t -> DevicePropertyValue.ValueCase.COLOR
+        "position" in t || "pantilt" in t -> DevicePropertyValue.ValueCase.POSITION
+        "strobe" in t || "shutter" in t -> DevicePropertyValue.ValueCase.STROBE
+        "kelvin" in t || "colortemperature" in t -> DevicePropertyValue.ValueCase.KELVINVALUE
+        "bool" in t -> DevicePropertyValue.ValueCase.BOOLVALUE
+        "dimmer" in t || "double" in t || "percent" in t || "intensity" in t -> DevicePropertyValue.ValueCase.DOUBLEVALUE
+        else -> null
+    }
+}
+
+fun DevicePropertyDescriptor.kind(hint: DevicePropertyValue.ValueCase? = null): PropKind {
     // Aufzählungen (Farbrad, Gobo, Strobe-Arten, Positionen …) haben Vorrang
     if (type.enumType && type.enumValuesCount > 0 && boundCase() != DevicePropertyValue.ValueCase.STROBE) return PropKind.ENUM
-    return when (boundCase()) {
+    // Ohne Typgrenzen (z. B. Gruppen-Eigenschaften "ColorType") aus Wert oder Typnamen ableiten
+    return when (boundCase() ?: inferCase(hint)) {
         DevicePropertyValue.ValueCase.DOUBLEVALUE -> PropKind.DOUBLE
         DevicePropertyValue.ValueCase.COLOR -> PropKind.COLOR
         DevicePropertyValue.ValueCase.POSITION -> PropKind.POSITION
@@ -134,6 +154,29 @@ fun DevicePropertyDescriptor.kind(): PropKind {
             type.enumType && type.enumValuesCount > 0 -> PropKind.ENUM
             else -> PropKind.UNSUPPORTED
         }
+    }
+}
+
+/**
+ * Wichtigkeit für die kompakte Ansicht (Bühne): kleinere Zahl = weiter oben, null = ausblenden.
+ * Reihenfolge wie am Pult: Dimmer, Strobe, Farbe, Farbrad, Farbtemperatur, Position, Gobo, Zoom/Fokus/Iris, Prisma.
+ */
+fun DevicePropertyDescriptor.importance(kind: PropKind): Int? {
+    val w = words()
+    return when {
+        kind == PropKind.UNSUPPORTED -> null
+        kind == PropKind.DOUBLE && ("dimmer" in w || "intensity" in w || "helligkeit" in w) -> 0
+        kind == PropKind.STROBE || "strobe" in w || "shutter" in w -> 1
+        kind == PropKind.COLOR -> 2
+        kind == PropKind.ENUM && ("color" in w || "farb" in w) -> 3
+        kind == PropKind.KELVIN -> 4
+        kind == PropKind.POSITION -> 5
+        "gobo" in w -> 6
+        "zoom" in w -> 7
+        "focus" in w || "fokus" in w -> 8
+        "iris" in w -> 9
+        "prism" in w -> 10
+        else -> null
     }
 }
 
