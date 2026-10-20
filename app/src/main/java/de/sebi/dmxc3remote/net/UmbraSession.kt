@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -47,6 +48,9 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 class UmbraException(message: String) : IOException(message)
+
+/** Projekt wurde nach dem Verbinden geladen: Sitzung wird sofort neu aufgebaut (neuer UserContext, frische Daten). */
+class ProjectReloadedException : IOException("Projekt neu geladen")
 
 data class ClientIdentity(
     val clientName: String,
@@ -169,10 +173,12 @@ class UmbraSession(
     val softdesk = SoftdeskModule(this, softdeskStore)
     val stage = StageModule(this)
     val micFeatures = MicFeaturesModule(this, mic, micToDmxc)
+    val deviceList = DeviceListModule(this)
+    val beatInputs = BeatInputModule(this)
 
     val modules: List<Module> = listOf(
         executors, masters, macros, mainSwitches, globals, cuelists, beat, audio,
-        timecodes, commandLine, notifications, devices, presets, project, dmx, system, softdesk, stage, micFeatures
+        timecodes, commandLine, notifications, devices, presets, project, dmx, system, softdesk, stage, micFeatures, deviceList, beatInputs
     )
 
     fun nextRequestId() = requestCounter.incrementAndGet().toString()
@@ -221,6 +227,13 @@ class UmbraSession(
         launch { throttler.run { e -> emit(e.describe(), isError = true) } }
         launch { userContextChanges() }
         modules.forEach { m -> launch { m.supervise() } }
+        // Projekt nach dem Verbinden geladen/gewechselt -> alles neu aufbauen.
+        // Hintergrund: Executoren, Cuelists usw. eines leeren bzw. alten Projekts bleiben sonst stehen,
+        // und der UserContext des alten Projekts nimmt keine Befehle mehr an.
+        launch {
+            project.reloaded.first { it }
+            throw ProjectReloadedException()
+        }
         pingLoop()
     }
 

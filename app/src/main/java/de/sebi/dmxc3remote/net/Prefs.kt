@@ -89,6 +89,10 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("beatHaptic", false)
         set(v) = sp.edit().putBoolean("beatHaptic", v).apply()
 
+    var cuelistCompact: Boolean
+        get() = sp.getBoolean("cuelistCompact", false)
+        set(v) = sp.edit().putBoolean("cuelistCompact", v).apply()
+
     var micToDmxc: Boolean
         get() = sp.getBoolean("micToDmxc", false)
         set(v) = sp.edit().putBoolean("micToDmxc", v).apply()

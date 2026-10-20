@@ -267,7 +267,7 @@ private fun ControlSettings(s: UmbraSession, vm: AppViewModel) {
             if (midiNames.isEmpty()) Text("Kein Controller angeschlossen (USB-OTG oder Bluetooth-MIDI).", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
             midiNames.forEach { Text(it) }
             Text(
-                "Zuordnung im Softdesk: Element bearbeiten, \"MIDI lernen\", Taste oder Fader am Controller bewegen.",
+                "Zuordnung im Bedienfeld: Element bearbeiten, \"MIDI lernen\", Taste oder Fader am Controller bewegen.",
                 style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
             )
             last?.let { Text("Zuletzt empfangen: ${if (it.kind == 'N') "Note" else "CC"} ${it.number}, Kanal ${it.channel + 1}, Wert ${it.value}", style = MaterialTheme.typography.bodySmall.merge(Numeric)) }

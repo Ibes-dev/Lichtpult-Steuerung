@@ -186,7 +186,7 @@ class SoftdeskStore(context: Context) {
      */
     fun importJson(text: String, replace: Boolean): Int {
         val root = JSONObject(text)
-        require(root.optString("format") == "dmxc3remote-softdesk") { "Keine Softdesk-Exportdatei" }
+        require(root.optString("format") == "dmxc3remote-softdesk") { "Keine Bedienfeld-Exportdatei" }
         val old = sp.getString("desks", "[]")
         sp.edit().putString("desks", root.getJSONArray("desks").toString()).apply()
         val imported = loadDesks()

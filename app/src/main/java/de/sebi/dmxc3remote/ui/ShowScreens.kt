@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -194,10 +195,15 @@ fun CuelistScreen(s: UmbraSession, vm: AppViewModel) {
     val groups by m.groups.collectAsStateWithLifecycle()
     val err by m.error.collectAsStateWithLifecycle()
     var group by rememberSaveable { mutableStateOf<String?>(null) }
+    val compact by vm.cuelistCompact.collectAsStateWithLifecycle()
+    var query by rememberSaveable { mutableStateOf("") }
 
-    val visible = remember(lists, groups, group) {
+    val visible = remember(lists, groups, group, query) {
         val g = group?.let { groups[it] }
-        (if (g != null) g.cuelistIdsList.mapNotNull { lists[it] } else lists.values.toList()).sortedBy { it.number }
+        val q = query.trim().lowercase()
+        (if (g != null) g.cuelistIdsList.mapNotNull { lists[it] } else lists.values.toList())
+            .filter { q.isEmpty() || it.name.lowercase().contains(q) || it.number.toString() == q }
+            .sortedBy { it.number }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -215,8 +221,38 @@ fun CuelistScreen(s: UmbraSession, vm: AppViewModel) {
             }
             OutlinedButton(onClick = m::stopAll, modifier = Modifier.padding(end = 10.dp)) { Text("Alle stoppen") }
         }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                query, { query = it },
+                placeholder = { Text("Suchen: Name oder Nummer") },
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+            FilterChip(selected = compact, onClick = { vm.setCuelistCompact(!compact) }, label = { Text("Kompakt") })
+        }
         if (visible.isEmpty()) {
-            EmptyHint("Keine Cuelists", "Im Projekt sind keine Cuelists angelegt oder die gewählte Gruppe ist leer.")
+            EmptyHint("Keine Cuelists", if (query.isBlank()) "Im Projekt sind keine Cuelists angelegt oder die gewählte Gruppe ist leer." else "Keine Cuelist passt zur Suche.")
+        } else if (compact) {
+            // Schlanke Zeilen für viele Cuelists: Status, Nummer, Name, aktueller Cue, Go, Stopp
+            LazyVerticalGrid(
+                GridCells.Adaptive(380.dp),
+                Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(visible, key = { it.id }) { cl ->
+                    CuelistRow(
+                        cl, s,
+                        isGo = goId == cl.id,
+                        onDetails = { detailId = cl.id }
+                    )
+                }
+            }
         } else {
             LazyVerticalGrid(
                 GridCells.Adaptive(320.dp),
@@ -238,6 +274,42 @@ fun CuelistScreen(s: UmbraSession, vm: AppViewModel) {
     }
     val det = detailId?.let { lists[it] }
     if (det != null) CuelistDetail(det, s) { detailId = null }
+}
+
+/** Kompakte Zeile (ca. 52 dp hoch) statt Karte. */
+@Composable
+private fun CuelistRow(cl: CuelistDescriptor, s: UmbraSession, isGo: Boolean, onDetails: () -> Unit) {
+    val m = s.cuelists
+    val stateColor = when (cl.state) {
+        ESceneListState.RUNNING -> Desk.Green
+        ESceneListState.PAUSED -> Desk.Amber
+        else -> Desk.Line
+    }
+    Row(
+        Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(8.dp)).background(Desk.Panel).padding(start = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(10.dp).clip(RoundedCornerShape(5.dp)).background(stateColor))
+        Text(
+            "${cl.number}",
+            style = MaterialTheme.typography.labelMedium.merge(Numeric),
+            color = if (isGo) Desk.Amber else Desk.TextDim,
+            modifier = Modifier.width(44.dp).padding(start = 8.dp)
+        )
+        Column(Modifier.weight(1f).clickable(onClick = onDetails)) {
+            Text(cl.name.ifBlank { "Cuelist ${cl.number}" }, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (cl.state != ESceneListState.STOPPED) {
+                Text(cl.cueName(cl.index), style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        androidx.compose.material3.IconButton(onClick = { m.action(cl.id, CuelistActionRequest.EAction.STOP) }) {
+            Icon(Icons.Filled.Stop, contentDescription = "Stopp", tint = Desk.TextDim)
+        }
+        Box(
+            Modifier.width(64.dp).fillMaxHeight().background(Desk.Green).clickable { m.action(cl.id, CuelistActionRequest.EAction.GO) },
+            contentAlignment = Alignment.Center
+        ) { Text("Go", color = Color.Black, style = MaterialTheme.typography.titleSmall) }
+    }
 }
 
 @Composable
@@ -581,6 +653,7 @@ private fun BeatSection(s: UmbraSession, vm: AppViewModel) {
                             view.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
                             if (micAuto) m.syncAt(unix, timeBase)           // Hybrid: Mikro = Tempo, Tap = Phase
                             else m.tap(unix, tapMode, timeBase, rounding)
+                            s.beatInputs.tapped()                          // Eingang "Takt: Tap" in DMXControl
                         }
                     },
                 contentAlignment = Alignment.Center

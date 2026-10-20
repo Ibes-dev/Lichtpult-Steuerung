@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Theaters
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Dashboard
@@ -69,12 +70,13 @@ import de.sebi.dmxc3remote.net.UmbraTarget
 enum class Dest(val label: String, val icon: ImageVector) {
     EXEC("Executoren", Icons.Filled.Tune),
     CUE("Cuelists", Icons.Filled.FormatListNumbered),
-    SOFT("Softdesk", Icons.Filled.Dashboard),
+    SOFT("Bedienfeld", Icons.Filled.Dashboard),
     PROG("Programmer", Icons.Filled.Palette),
     MASTER("Master", Icons.Filled.Brightness6),
     MACRO("Macros", Icons.Filled.Bolt),
     MEDIA("Beat & Medien", Icons.Filled.MusicNote),
     STAGE("Bühne", Icons.Filled.Theaters),
+    DEVICES("Geräte", Icons.Filled.Lightbulb),
     CONSOLE("Befehle", Icons.Filled.Code),
     SYSTEM("System", Icons.Filled.Settings),
     DIAG("Diagnose", Icons.Filled.BugReport),
@@ -161,6 +163,7 @@ private fun Content(dest: Dest, vm: AppViewModel, s: UmbraSession, order: List<D
         Dest.MACRO -> MacroScreen(s)
         Dest.MEDIA -> MediaScreen(s, vm)
         Dest.STAGE -> StageScreen(s)
+        Dest.DEVICES -> DevicesScreen(s)
         Dest.CONSOLE -> ConsoleScreen(s)
         Dest.SYSTEM -> SystemScreen(s, vm)
         Dest.DIAG -> DiagnosticsScreen(s)
@@ -284,6 +287,7 @@ private fun TopBar(vm: AppViewModel, session: UmbraSession, target: UmbraTarget)
             IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Menü") }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 DropdownMenuItem(text = { Text("Projekt speichern") }, onClick = { menu = false; session.project.save() })
+                DropdownMenuItem(text = { Text("Neu synchronisieren") }, onClick = { menu = false; vm.resync() })
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text("Verbindung trennen") }, onClick = { menu = false; vm.disconnect() })
             }

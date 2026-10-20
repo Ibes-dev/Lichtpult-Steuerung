@@ -97,7 +97,7 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3rem
     ) { uri ->
         if (uri != null) runCatching {
             ctx.contentResolver.openOutputStream(uri)?.use { it.write(store.exportJson().toByteArray()) }
-            s.emit("Softdesks exportiert")
+            s.emit("Bedienfelder exportiert")
         }.onFailure { s.emit("Export: ${it.message}", isError = true) }
     }
     val importer = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -133,7 +133,7 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3rem
                 if (edit) item {
                     FilterChip(
                         selected = false,
-                        onClick = { deskId = store.addDesk("Softdesk ${desks.size + 1}") },
+                        onClick = { deskId = store.addDesk("Bedienfeld ${desks.size + 1}") },
                         leadingIcon = { Icon(Icons.Filled.Add, null, Modifier.size(16.dp)) },
                         label = { Text("Neu") }
                     )
@@ -155,7 +155,7 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3rem
             ) {
                 if (desk != null) OutlinedButton(onClick = { deskDialog = true }) { Text("Raster") }
                 OutlinedButton(onClick = { rulesDialog = true }) { Text("Rückmeldung") }
-                OutlinedButton(onClick = { exporter.launch("softdesks.json") }) { Text("Export") }
+                OutlinedButton(onClick = { exporter.launch("bedienfelder.json") }) { Text("Export") }
                 OutlinedButton(onClick = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) }) { Text("Import") }
                 OutlinedButton(onClick = { diagDialog = true }) { Text("Diagnose") }
             }
@@ -169,7 +169,7 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3rem
 
         if (desk == null) {
             EmptyHint(
-                "Noch kein Softdesk",
+                "Noch kein Bedienfeld",
                 "Auf Bearbeiten tippen, dann Neu. Elemente legst du durch Antippen freier Rasterfelder an. " +
                     "In der DMXControl-Eingangszuweisung stehen sie unter \"Android: ${s.clientName}\"."
             )
@@ -219,14 +219,14 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3rem
             runCatching {
                 val text = ctx.contentResolver.openInputStream(iu)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: error("Datei leer")
                 val n = store.importJson(text, replace)
-                s.emit("$n Softdesk(s) importiert")
+                s.emit("$n Bedienfeld(er) importiert")
             }.onFailure { s.emit("Import: ${it.message}", isError = true) }
             importUri = null
         }
         AlertDialog(
             onDismissRequest = { importUri = null },
-            title = { Text("Softdesks importieren") },
-            text = { Text("Ergänzen behält vorhandene Softdesks und ersetzt nur gleichnamige IDs. Ersetzen löscht alle vorhandenen.") },
+            title = { Text("Bedienfelder importieren") },
+            text = { Text("Ergänzen behält vorhandene Bedienfelder und ersetzt nur gleiche IDs. Ersetzen löscht alle vorhandenen.") },
             confirmButton = { TextButton(onClick = { doImport(false) }) { Text("Ergänzen") } },
             dismissButton = { TextButton(onClick = { doImport(true) }) { Text("Alles ersetzen", color = Desk.Red) } }
         )
@@ -727,7 +727,7 @@ private fun DeskDialog(desk: Softdesk, onDismiss: () -> Unit, onDelete: () -> Un
     val minRows = desk.elements.maxOfOrNull { it.y + it.h } ?: 1
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Softdesk") },
+        title = { Text("Bedienfeld") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(d.name, { d = d.copy(name = it) }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
