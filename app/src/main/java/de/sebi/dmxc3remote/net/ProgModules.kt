@@ -266,6 +266,10 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
     private val _applied = MutableStateFlow<Map<String, List<String>>>(emptyMap())
     val applied: StateFlow<Map<String, List<String>>> = _applied.asStateFlow()
 
+    /** Anzeigename je angewendeter Effekt-Instanz. */
+    private val _effectNames = MutableStateFlow<Map<String, String>>(emptyMap())
+    val effectNames: StateFlow<Map<String, String>> = _effectNames.asStateFlow()
+
     @Volatile private var selectedGroup: String? = null
 
     /**
@@ -435,7 +439,17 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
         )
         val id = r.attachable.id.ifBlank { a.id }
         _applied.update { m -> m + ("$groupId:$propertyId" to ((m["$groupId:$propertyId"] ?: emptyList()) + id)) }
-        s.emit("Effekt ${a.displayName.ifBlank { a.name }} gesetzt")
+        _effectNames.update { it + (id to a.displayName.ifBlank { a.name }) }
+        runCatching { s.programmer.readEffectParams(id) }
+    }
+
+    fun removeEffect(groupId: String, propertyId: String, id: String) = act("Effekt entfernen") {
+        progStub.dl(5).deleteProgrammerAttachable(
+            DeleteProgrammerAttachableRequest.newBuilder().setRequestId(s.nextRequestId()).setAttachableId(id)
+                .setUserContextId(s.userContextId).build(),
+            s.headers
+        ).requireOk("DeleteProgrammerAttachable")
+        _applied.update { m -> m + ("$groupId:$propertyId" to ((m["$groupId:$propertyId"] ?: emptyList()) - id)) }
     }
 
     fun removeEffects(groupId: String, propertyId: String) = act("Effekte entfernen") {

@@ -70,7 +70,7 @@ import de.sebi.dmxc3remote.net.text
 
 // ============================================================== Programmer
 @Composable
-fun ProgrammerScreen(s: UmbraSession) {
+internal fun ProgrammerValuesTab(s: UmbraSession, focusGroup: String?) {
     val dm = s.devices
     val groups by dm.groups.collectAsStateWithLifecycle()
     val presets by s.presets.items.collectAsStateWithLifecycle()
@@ -83,6 +83,13 @@ fun ProgrammerScreen(s: UmbraSession) {
         selected = if (selected == id) null else id
         dm.select(listOfNotNull(selected))
     }
+    // Sprung aus "Inhalt": Gruppe direkt öffnen
+    LaunchedEffect(focusGroup) {
+        if (focusGroup != null && focusGroup != selected) {
+            selected = focusGroup
+            dm.select(listOf(focusGroup))
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         ModuleError(err)
@@ -91,13 +98,12 @@ fun ProgrammerScreen(s: UmbraSession) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                group?.name?.ifBlank { null } ?: "Keine Gruppe gewählt",
+                group?.name?.ifBlank { null } ?: "Gruppe wählen",
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            OutlinedButton(onClick = dm::clearProgrammer) { Text("Programmer leeren") }
         }
         if (isWide()) {
             // Tablet: Gruppenliste links, Eigenschaften und Presets rechts
@@ -160,12 +166,15 @@ internal fun PropertyPane(
     var showAll by remember(group?.id) { mutableStateOf(false) }
     // Kompakt: nur wichtige Funktionen, sortiert wie am Pult
     val props = remember(group, progValues, fannedMap, compact, showAll) {
-        val list = group?.propertiesList ?: emptyList()
-        if (!compact || showAll) list
-        else list.mapNotNull { p ->
-            val k = p.kind(serverValue(group!!.id, p, progValues, fannedMap)?.valueCase)
-            p.importance(k)?.let { it to p }
-        }.sortedBy { it.first }.map { it.second }
+        val gid = group?.id ?: ""
+        // Nicht bedienbare Eigenschaften (Rohwerte ohne Typbeschreibung) werden gar nicht angezeigt
+        val list = (group?.propertiesList ?: emptyList())
+            .map { it to it.kind(serverValue(gid, it, progValues, fannedMap)?.valueCase) }
+            .filter { it.second != PropKind.UNSUPPORTED }
+        if (!compact || showAll) {
+            // wichtige Funktionen zuerst, Rest alphabetisch
+            list.sortedWith(compareBy({ it.first.importance(it.second) ?: 99 }, { it.first.displayName.ifBlank { it.first.name } })).map { it.first }
+        } else list.mapNotNull { (p, k) -> p.importance(k)?.let { it to p } }.sortedBy { it.first }.map { it.second }
     }
     LazyColumn(
         modifier,
@@ -175,7 +184,7 @@ internal fun PropertyPane(
         if (group == null) {
             item {
                 Text(
-                    "Gerätegruppe wählen, um Dimmer, Farbe und Position zu setzen. Presets wirken ohne Auswahl auf alle enthaltenen Geräte.",
+                    "Gerätegruppe wählen, um Dimmer, Farbe, Position und Effekte zu setzen.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Desk.TextDim
                 )
@@ -184,11 +193,11 @@ internal fun PropertyPane(
             items(props) { p -> PropertyControl(s, group, p, compact && !showAll) }
             if (compact) item {
                 androidx.compose.material3.TextButton(onClick = { showAll = !showAll }) {
-                    Text(if (showAll) "Nur wichtige Funktionen" else "Alle ${group.propertiesCount} Funktionen anzeigen")
+                    Text(if (showAll) "Nur wichtige Funktionen" else "Alle Funktionen anzeigen")
                 }
             }
         }
-        item {
+        if (compact) item {
             Section(if (group != null) "Presets für ${group.name}" else "Presets", error = presetErr) {
                 if (presets.isEmpty()) Text("Keine Presets im Projekt.", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
                 PresetGrid(presets) { id -> s.presets.invoke(id, group?.id) }
@@ -234,6 +243,7 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
     LaunchedEffect(server) { server?.let { v -> fromServer(v, p, kind)?.let { localValues[key] = it } } }
     var effectDialog by remember { mutableStateOf(false) }
     var fanOpen by remember { mutableStateOf(false) }
+    var effectsOpen by remember { mutableStateOf(false) }
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Desk.Panel).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -383,40 +393,43 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
                         dm.setEnum(g.id, p, entries[i])
                     }
                 }
-                PropKind.UNSUPPORTED -> Text(
-                    "$label: Typ ${p.type.name.ifBlank { p.devicePropertyTypeAQ.substringBefore(',').substringAfterLast('.') }} " +
-                        "(${p.boundCase()?.name ?: "ohne Grenzen"}) lässt sich in der App noch nicht einstellen.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Desk.TextDim
-                )
+                PropKind.UNSUPPORTED -> Unit
             }
         }
         val fanned = fannedMap[key]
         // "gefächert" nur, wenn die Geräte wirklich unterschiedliche Werte haben
         val reallyFanned = fanned != null && fanned.fannedValuesList.map { it.toByteString() }.distinct().size > 1
-        if (!compact || server != null) Text(
-            when {
-                reallyFanned -> "Im Programmer gefächert" + fanned!!.fannedValuesList.takeIf { l ->
-                    l.all { it.valueCase == LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.DOUBLEVALUE }
-                }?.let { l -> ": " + l.joinToString(" … ") { "%.2f".format(it.doubleValue) } }.orEmpty()
-                server != null -> "Im Programmer"
-                else -> "Nicht im Programmer"
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = if (server != null) Desk.Amber else Desk.TextDim
-        )
-        if (!compact && kind != PropKind.UNSUPPORTED) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                androidx.compose.material3.TextButton(onClick = { effectDialog = true }) { Text("Effekt …") }
-                if (!appliedMap[key].isNullOrEmpty()) {
-                    androidx.compose.material3.TextButton(onClick = { dm.removeEffects(g.id, p.id) }) { Text("Effekte entfernen") }
-                }
-                if (kind == PropKind.DOUBLE) {
-                    androidx.compose.material3.TextButton(onClick = { fanOpen = !fanOpen }) { Text(if (fanOpen) "Fächern schließen" else "Fächern") }
+        val effects = appliedMap[key] ?: emptyList()
+        if (server != null || reallyFanned || effects.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    buildList {
+                        add(if (reallyFanned) "Gefächert" + (fanned!!.operator.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "") else "Im Programmer")
+                        if (effects.isNotEmpty()) add("${effects.size} Effekt" + if (effects.size > 1) "e" else "")
+                    }.joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Desk.Amber,
+                    modifier = Modifier.weight(1f)
+                )
+                if (!compact && server != null) {
+                    androidx.compose.material3.TextButton(onClick = { s.programmer.remove(g.id, p.id) }) { Text("Entfernen") }
                 }
             }
         }
+        if (!compact) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (kind == PropKind.DOUBLE) {
+                    FilterChip(selected = fanOpen, onClick = { fanOpen = !fanOpen }, label = { Text("Fächern") })
+                }
+                FilterChip(
+                    selected = effectsOpen,
+                    onClick = { effectsOpen = !effectsOpen },
+                    label = { Text(if (effects.isEmpty()) "Effekte" else "Effekte (${effects.size})") }
+                )
+            }
+        }
         if (fanOpen && kind == PropKind.DOUBLE) FanControl(s, g, p)
+        if (effectsOpen) EffectsPanel(s, g, p, effects) { effectDialog = true }
     }
     if (effectDialog) EffectDialog(s, g, p) { effectDialog = false }
 }
@@ -505,23 +518,84 @@ private fun EnumChips(labels: List<String>, selected: Int, colors: List<Color?> 
     }
 }
 
+/**
+ * Fächern: Operator (Verlauf), Start- und Endwert, wie Gruppen behandelt werden, Gruppengröße.
+ * Werte werden live gesendet; die Statuszeile darüber zeigt, was DMXControl übernommen hat.
+ */
 @Composable
 private fun FanControl(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePropertyDescriptor) {
     val range = p.doubleRange()
+    val operators by s.programmer.operators.collectAsStateWithLifecycle()
+    var op by remember(g.id, p.id, operators) { mutableStateOf(operators.firstOrNull() ?: "") }
     var from by remember(g.id, p.id) { mutableStateOf(range.start.toFloat()) }
     var to by remember(g.id, p.id) { mutableStateOf(range.endInclusive.toFloat()) }
+    var mode by remember(g.id, p.id) { mutableStateOf(de.sebi.dmxc3remote.net.GroupMode.CONCAT) }
+    var size by remember(g.id, p.id) { mutableStateOf(1) }
+    val send = { s.programmer.setFan(g.id, p, op, from.toDouble(), to.toDouble()) }
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Desk.Surface).padding(8.dp)
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Desk.Surface).padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Text("Von ${"%.2f".format(from)} bis ${"%.2f".format(to)} über die Geräte der Gruppe", style = MaterialTheme.typography.labelMedium)
-        Slider(from, { from = it; s.devices.setFanned(g.id, p, from.toDouble(), to.toDouble()) },
-            valueRange = range.start.toFloat()..range.endInclusive.toFloat())
-        Slider(to, { to = it; s.devices.setFanned(g.id, p, from.toDouble(), to.toDouble()) },
-            valueRange = range.start.toFloat()..range.endInclusive.toFloat())
-        Text(
-            "Ungeprüft, ob DMXControl dieses Format annimmt. Erscheint oben \"Im Programmer gefächert\", hat es geklappt.",
-            style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
-        )
+        if (operators.isNotEmpty()) {
+            Text("Verlauf", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(operators) { o -> FilterChip(selected = op == o, onClick = { op = o; send() }, label = { Text(o) }) }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Start", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(48.dp))
+            Slider(from, { from = it; send() }, Modifier.weight(1f), valueRange = range.start.toFloat()..range.endInclusive.toFloat())
+            Text("%.2f".format(from), style = MaterialTheme.typography.labelSmall.merge(Numeric), modifier = Modifier.width(48.dp))
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Ende", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(48.dp))
+            Slider(to, { to = it; send() }, Modifier.weight(1f), valueRange = range.start.toFloat()..range.endInclusive.toFloat())
+            Text("%.2f".format(to), style = MaterialTheme.typography.labelSmall.merge(Numeric), modifier = Modifier.width(48.dp))
+        }
+        Text("Mehrere Gruppen", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(de.sebi.dmxc3remote.net.GroupMode.entries) { m ->
+                FilterChip(selected = mode == m, onClick = { mode = m; s.programmer.setGroupMode(g.id, p.id, m) }, label = { Text(m.label) })
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Gruppengröße", style = MaterialTheme.typography.labelMedium)
+                Text("So viele Geräte bekommen jeweils denselben Wert", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+            }
+            androidx.compose.material3.TextButton(onClick = { size = (size - 1).coerceAtLeast(1); s.programmer.setFanGroupSize(g.id, p.id, size) }, enabled = size > 1) { Text("−") }
+            Text("$size", style = MaterialTheme.typography.titleMedium.merge(Numeric))
+            androidx.compose.material3.TextButton(onClick = { size += 1; s.programmer.setFanGroupSize(g.id, p.id, size) }) { Text("+") }
+        }
+    }
+}
+
+/** Effekte auf dieser Eigenschaft: Parameter direkt einstellbar, einzeln entfernbar. */
+@Composable
+private fun EffectsPanel(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePropertyDescriptor, effects: List<String>, onAdd: () -> Unit) {
+    val names by s.devices.effectNames.collectAsStateWithLifecycle()
+    val params by s.programmer.effectParams.collectAsStateWithLifecycle()
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Desk.Surface).padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        effects.forEach { id ->
+            LaunchedEffect(id) { if (params[id] == null) s.programmer.loadEffectParams(id) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(names[id] ?: "Effekt", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                androidx.compose.material3.TextButton(onClick = { s.devices.removeEffect(g.id, p.id, id) }) { Text("Entfernen") }
+            }
+            val list = params[id]
+            when {
+                list == null -> Text("Parameter werden geladen …", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+                list.isEmpty() -> Text("Dieser Effekt hat keine einstellbaren Parameter.", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+                else -> list.filter { it.isEditable() }.sortedBy { it.desc.saveOrder }.forEach { prm ->
+                    ParamEditor(prm) { v -> s.programmer.setEffectParam(id, prm.desc, v) }
+                }
+            }
+            HorizontalDivider(color = Desk.Line)
+        }
+        OutlinedButton(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("Effekt hinzufügen") }
     }
 }
 

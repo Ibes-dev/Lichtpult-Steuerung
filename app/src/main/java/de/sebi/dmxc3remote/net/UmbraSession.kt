@@ -175,10 +175,11 @@ class UmbraSession(
     val micFeatures = MicFeaturesModule(this, mic, micToDmxc)
     val deviceList = DeviceListModule(this)
     val beatInputs = BeatInputModule(this)
+    val programmer = ProgrammerModule(this)
 
     val modules: List<Module> = listOf(
         executors, masters, macros, mainSwitches, globals, cuelists, beat, audio,
-        timecodes, commandLine, notifications, devices, presets, project, dmx, system, softdesk, stage, micFeatures, deviceList, beatInputs
+        timecodes, commandLine, notifications, devices, presets, project, dmx, system, softdesk, stage, micFeatures, deviceList, beatInputs, programmer
     )
 
     fun nextRequestId() = requestCounter.incrementAndGet().toString()
