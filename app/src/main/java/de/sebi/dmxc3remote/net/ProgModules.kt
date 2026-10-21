@@ -437,6 +437,7 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
                 .build(),
             s.headers
         )
+        s.programmer.touch()
         val id = r.attachable.id.ifBlank { a.id }
         _applied.update { m -> m + ("$groupId:$propertyId" to ((m["$groupId:$propertyId"] ?: emptyList()) + id)) }
         _effectNames.update { it + (id to a.displayName.ifBlank { a.name }) }
@@ -497,6 +498,10 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
     private fun devicesOf(id: String) = id.removePrefix(MULTI).split(',').filter { it.isNotBlank() }
 
     private suspend fun setValue(groupId: String, propertyId: String, value: DevicePropertyValue) {
+        try { setValueRaw(groupId, propertyId, value) } finally { s.programmer.touch() }
+    }
+
+    private suspend fun setValueRaw(groupId: String, propertyId: String, value: DevicePropertyValue) {
         if (isMulti(groupId)) {
             // UNVERIFIZIERT: Programmer-Wert je Gerät, Geräte-ID im Feld groupId
             devicesOf(groupId).forEach { dev ->

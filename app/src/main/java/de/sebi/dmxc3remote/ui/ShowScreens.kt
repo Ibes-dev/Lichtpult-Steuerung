@@ -37,6 +37,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
@@ -227,12 +228,7 @@ fun CuelistScreen(s: UmbraSession, vm: AppViewModel) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            OutlinedTextField(
-                query, { query = it },
-                placeholder = { Text("Suchen: Name oder Nummer") },
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
+            CompactSearch(query, { query = it }, "Cuelist suchen", Modifier.weight(1f))
         }
         if (visible.isEmpty()) {
             EmptyHint("Keine Cuelists", if (query.isBlank()) "Im Projekt sind keine Cuelists angelegt oder die gewählte Gruppe ist leer." else "Keine Cuelist passt zur Suche.")
@@ -316,9 +312,18 @@ private fun CuelistRow(cl: CuelistDescriptor, s: UmbraSession, isGo: Boolean, on
 private fun CuelistDetail(cl: CuelistDescriptor, s: UmbraSession, onClose: () -> Unit) {
     val progress by s.cuelists.progress.collectAsStateWithLifecycle()
     val p = progress[cl.id]
+    var renameList by remember { mutableStateOf(false) }
+    var renameCue by remember { mutableStateOf<Pair<String, String>?>(null) }   // cueId to Name
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onClose,
-        title = { Text(cl.name.ifBlank { "Cuelist ${cl.number}" }) },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(cl.name.ifBlank { "Cuelist ${cl.number}" }, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                androidx.compose.material3.IconButton(onClick = { renameList = true }) {
+                    Icon(Icons.Filled.Edit, contentDescription = "Cuelist umbenennen", tint = Desk.TextDim)
+                }
+            }
+        },
         text = {
             androidx.compose.foundation.lazy.LazyColumn(Modifier.height(440.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 itemsIndexedCompat(s.cuelists.cuesOf(cl.id)) { pos, c ->
@@ -341,6 +346,9 @@ private fun CuelistDetail(cl: CuelistDescriptor, s: UmbraSession, onClose: () ->
                                 if (current) Text("aktiv", style = MaterialTheme.typography.labelSmall, color = Desk.Green)
                                 else if (next) Text("als Nächstes", style = MaterialTheme.typography.labelSmall, color = Desk.Amber)
                             }
+                            androidx.compose.material3.IconButton(onClick = { renameCue = c.cueId to c.name }, modifier = Modifier.size(36.dp)) {
+                                Icon(Icons.Filled.Edit, contentDescription = "Cue umbenennen", tint = Desk.TextDim, modifier = Modifier.size(18.dp))
+                            }
                             androidx.compose.material3.TextButton(onClick = { s.cuelists.load(cl.id, pos) }) { Text("Load") }
                             androidx.compose.material3.TextButton(onClick = { s.cuelists.goTo(cl.id, pos) }) { Text("Go To") }
                         }
@@ -362,6 +370,10 @@ private fun CuelistDetail(cl: CuelistDescriptor, s: UmbraSession, onClose: () ->
             Text("Go To: zu diesem Cue springen. Load: als nächsten Cue vorbereiten.", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
         }
     )
+    if (renameList) RenameDialog("Cuelist umbenennen", cl.name, { s.cuelists.renameCuelist(cl.id, it); renameList = false }) { renameList = false }
+    renameCue?.let { (id, name) ->
+        RenameDialog("Cue umbenennen", name, { s.cuelists.renameCue(cl.id, id, it); renameCue = null }) { renameCue = null }
+    }
 }
 
 private fun CuelistDescriptor.cueName(index: Int): String {

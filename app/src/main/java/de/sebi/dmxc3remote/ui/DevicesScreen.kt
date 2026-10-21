@@ -37,6 +37,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.filled.ArrowDropDown
 import de.sebi.dmxc3remote.net.DevParam
 import de.sebi.dmxc3remote.net.UmbraSession
 import de.sebi.dmxc3remote.net.text
@@ -50,14 +51,19 @@ fun DevicesScreen(s: UmbraSession) {
     val progress by m.progress.collectAsStateWithLifecycle()
     val err by m.error.collectAsStateWithLifecycle()
     var query by rememberSaveable { mutableStateOf("") }
+    var groupId by rememberSaveable { mutableStateOf<String?>(null) }
+    var groupMenu by remember { mutableStateOf(false) }
+    val groups by s.devices.groups.collectAsStateWithLifecycle()
+    val sortedGroups = remember(groups) { groups.values.sortedBy { it.number } }
     var openId by remember { mutableStateOf<String?>(null) }
     DisposableEffect(Unit) {
         m.setActive(true)
         onDispose { m.setActive(false) }
     }
     val q = query.trim().lowercase()
-    val visible = remember(devices, q, params) {
-        devices.filter { d ->
+    val inGroup = remember(groupId, groups) { groupId?.let { groups[it]?.deviceIdsList?.toSet() } }
+    val visible = remember(devices, q, params, inGroup) {
+        devices.filter { d -> inGroup == null || d.id in inGroup }.filter { d ->
             q.isEmpty() || d.name.lowercase().contains(q) || d.number.toString() == q ||
                 d.model.lowercase().contains(q) || m.addressOf(d.id)?.toString()?.startsWith(q) == true
         }
@@ -65,13 +71,33 @@ fun DevicesScreen(s: UmbraSession) {
 
     Column(Modifier.fillMaxSize()) {
         ModuleError(err)
-        OutlinedTextField(
-            query, { query = it }, singleLine = true,
-            placeholder = { Text("Suchen: Name, Nummer, Modell oder Adresse (z. B. 1.025)") },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)
-        )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            CompactSearch(query, { query = it }, "Name, Nr., Modell, Adresse", Modifier.weight(1f))
+            androidx.compose.foundation.layout.Box {
+                androidx.compose.material3.FilterChip(
+                    selected = groupId != null,
+                    onClick = { groupMenu = true },
+                    label = { Text(groupId?.let { groups[it]?.name } ?: "Alle Gruppen", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    trailingIcon = { androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.ArrowDropDown, null) },
+                    modifier = Modifier.width(150.dp)
+                )
+                androidx.compose.material3.DropdownMenu(expanded = groupMenu, onDismissRequest = { groupMenu = false }) {
+                    androidx.compose.material3.DropdownMenuItem(text = { Text("Alle Gruppen") }, onClick = { groupId = null; groupMenu = false })
+                    sortedGroups.forEach { g ->
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(g.name.ifBlank { "Gruppe ${g.number}" } + "  (${g.deviceIdsCount})") },
+                            onClick = { groupId = g.id; groupMenu = false }
+                        )
+                    }
+                }
+            }
+        }
         Text(
-            progress ?: "${devices.size} Geräte",
+            progress ?: if (visible.size == devices.size) "${devices.size} Geräte" else "${visible.size} von ${devices.size} Geräten",
             style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, modifier = Modifier.padding(horizontal = 10.dp)
         )
         // Kopfzeile

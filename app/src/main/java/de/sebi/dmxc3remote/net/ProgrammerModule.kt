@@ -115,9 +115,14 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
         if (r.groupStatesCount == 0) _origin.value = null
     }
 
+    /** Zähler für "Inhalt neu lesen"; wird von Änderungsmeldungen und eigenen Befehlen erhöht. */
+    private val dirty = MutableStateFlow(0)
+
+    /** Nach eigenen Programmer-Befehlen aufrufen, damit "Inhalt" sofort stimmt. */
+    fun touch() = dirty.update { it + 1 }
+
     /** Programmer-Änderungen (auch vom PC) -> Inhalt neu lesen, gebündelt alle 300 ms. */
     override suspend fun stream() = kotlinx.coroutines.coroutineScope {
-        val dirty = MutableStateFlow(0)
         launch {
             var seen = 0
             while (true) {
@@ -126,9 +131,14 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
                 if (d != seen) { seen = d; runCatching { refresh() } }
             }
         }
+        // Sicherheitsnetz: alle 3 s nachlesen, falls eine Änderung keine Meldung erzeugt
+        launch {
+            while (true) { delay(3_000); dirty.update { it + 1 } }
+        }
         prog.receiveProgrammerChanges(s.getRequest(), s.headers).collect { m ->
-            if (m.userContextId.isNotBlank() && m.userContextId != s.userContextId) return@collect
-            if (m.type == ProgrammerChangeMessage.EChangeType.OutputMode) _blind.value = m.mode == EOutputMode.HIDDEN
+            if (m.type == ProgrammerChangeMessage.EChangeType.OutputMode &&
+                (m.userContextId.isBlank() || m.userContextId == s.userContextId)
+            ) _blind.value = m.mode == EOutputMode.HIDDEN
             dirty.update { it + 1 }
         }
     }
@@ -289,6 +299,7 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
                     ).build(),
                 s.headers
             )
+            touch()
         }
 
     fun setGroupMode(groupId: String, propertyId: String, mode: GroupMode) = act("Gruppenverhalten") {

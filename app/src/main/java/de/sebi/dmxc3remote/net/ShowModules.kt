@@ -370,6 +370,44 @@ class CuelistModule(s: UmbraSession) : Module(s, "Cuelists") {
         else -> cueIndex
     }
 
+    /** Cue umbenennen (CueClient.SetCueValue, Feld name). */
+    fun renameCue(cuelistId: String, cueId: String, name: String) = act("Cue umbenennen") {
+        val cue = _items.value[cuelistId]?.cuesList?.firstOrNull { it.cueId == cueId }
+        LumosProtobufClient.CueClientGrpcKt.CueClientCoroutineStub(s.channel).dl(5).setCueValue(
+            LumosProtobuf.Cue.CueServiceTypes.SetCueValueRequest.newBuilder()
+                .setRequestId(s.nextRequestId())
+                .setCueId(cueId)
+                .setParentContainerId(cue?.parentContainerId?.ifBlank { null } ?: cuelistId)
+                .setName(name)
+                .build(),
+            s.headers
+        ).requireOk("Cue umbenennen")
+        s.emit("Cue umbenannt in \"$name\"")
+    }
+
+    /**
+     * Cuelist umbenennen. Die Cuelist-Schnittstelle hat dafür keinen eigenen Aufruf; der Name wird
+     * über die allgemeine Parameter-Schnittstelle gesetzt (type "Cuelist", Parameter "Name").
+     */
+    fun renameCuelist(cuelistId: String, name: String) = act("Cuelist umbenennen") {
+        val par = LumosProtobufClient.ParameterClientGrpcKt.ParameterClientCoroutineStub(s.channel)
+        val r = par.dl(10).getParameters(
+            LumosProtobuf.ParameterServiceTypes.GetParametersRequest.newBuilder()
+                .setType("Cuelist").setId(cuelistId).setIncludingValues(true).setUserContextId(s.userContextId).build(),
+            s.headers
+        )
+        val p = r.parametersList.firstOrNull { it.name.equals("Name", true) }
+            ?: r.parametersList.firstOrNull { it.name.contains("name", true) || it.displayName.contains("name", true) }
+            ?: throw UmbraException("DMXControl bietet für Cuelists keinen Namensparameter an")
+        par.dl(5).setParameterValue(
+            LumosProtobuf.ParameterServiceTypes.SetTestParameterValueRequest.newBuilder()
+                .setId(cuelistId).setParameter(p).setUserContextId(s.userContextId)
+                .setValue(LumosProtobuf.CommonTypes.ObjectData.newBuilder().setStringValue(name)).build(),
+            s.headers
+        ).requireOk("Cuelist umbenennen")
+        s.emit("Cuelist umbenannt in \"$name\"")
+    }
+
     /** Index für Aktionen, die einen Cue adressieren (gleiche Basis wie Go To, sobald erkannt). */
     fun indexOf(id: String, pos: Int): Int {
         val cue = cuesOf(id).getOrNull(pos) ?: return pos
