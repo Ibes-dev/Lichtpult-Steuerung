@@ -183,7 +183,7 @@ internal fun PropertyPane(
                 )
             }
         } else {
-            items(props) { p -> PropertyControl(s, group, p, compact && !showAll) }
+            items(props, key = { it.id }) { p -> PropertyControl(s, group, p, compact && !showAll) }
             if (compact) item {
                 androidx.compose.material3.TextButton(onClick = { showAll = !showAll }) {
                     Text(if (showAll) "Nur wichtige Funktionen" else "Alle Funktionen anzeigen")
@@ -239,9 +239,10 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
     val kind = p.kind(server?.valueCase)
     LaunchedEffect(server) { server?.let { v -> fromServer(v, p, kind)?.let { localValues[key] = it } } }
     var effectDialog by remember { mutableStateOf(false) }
-    var fanOpen by remember { mutableStateOf(false) }
-    var effectsOpen by remember { mutableStateOf(false) }
-    var detail by remember(key) { mutableStateOf(false) }
+    val open by openPanel
+    val detail = open == "$key:detail"
+    val fanOpen = open == "$key:fan"
+    val effectsOpen = open == "$key:fx"
     var menu by remember { mutableStateOf(false) }
     val fanned = fannedMap[key]
     val reallyFanned = fanned != null && fanned.fannedValuesList.map { it.toByteString() }.distinct().size > 1
@@ -257,7 +258,10 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
                     if (reallyFanned) add("gefächert")
                     if (effects.isNotEmpty()) add("${effects.size} Effekt" + if (effects.size > 1) "e" else "")
                 }
-                if (tags.isNotEmpty()) Text(tags.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = Desk.Amber, maxLines = 1)
+                if (tags.isNotEmpty()) Text(
+                    tags.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = Desk.Amber, maxLines = 1,
+                    modifier = Modifier.clickableNoRipple { toggle(if (effects.isNotEmpty() && !reallyFanned) "$key:fx" else "$key:fan") }
+                )
             }
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                 when (kind) {
@@ -285,8 +289,20 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
                     PropKind.STROBE -> {
                         val r = p.strobeRange()
                         val v = localValues[key]?.firstOrNull() ?: r.start.toFloat()
-                        RowSlider(v, r.start.toFloat()..r.endInclusive.toFloat(), "%.1f".format(v)) { nv ->
-                            localValues[key] = listOf(nv); dm.setStrobe(g.id, p.id, nv.toDouble(), strobeType[key])
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.weight(1f)) {
+                                RowSlider(v, r.start.toFloat()..r.endInclusive.toFloat(), "%.1f".format(v)) { nv ->
+                                    localValues[key] = listOf(nv); dm.setStrobe(g.id, p.id, nv.toDouble(), strobeType[key])
+                                }
+                            }
+                            if (p.type.enumValuesCount > 0) {
+                                androidx.compose.material3.IconButton(onClick = { toggle("$key:detail") }, modifier = Modifier.size(32.dp)) {
+                                    Icon(
+                                        if (detail) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                        contentDescription = "Strobe-Art", tint = Desk.TextDim
+                                    )
+                                }
+                            }
                         }
                     }
                     PropKind.BOOL -> {
@@ -299,13 +315,13 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
                     }
                     PropKind.COLOR -> {
                         val rgb = localValues[key] ?: listOf(1f, 1f, 1f)
-                        ValueButton(detail, { detail = !detail }, Color(rgb[0], rgb[1], rgb[2]),
+                        ValueButton(detail, { toggle("$key:detail") }, Color(rgb[0], rgb[1], rgb[2]),
                             "%.0f · %.0f · %.0f %%".format(rgb[0] * 100, rgb[1] * 100, rgb[2] * 100))
                     }
                     PropKind.POSITION -> {
                         val r = p.positionRange()
                         val xy = localValues[key] ?: listOf(0.5f, 0.5f)
-                        ValueButton(detail, { detail = !detail }, null,
+                        ValueButton(detail, { toggle("$key:detail") }, null,
                             "Pan %.0f · Tilt %.0f".format(
                                 r.pan.start + xy[0] * (r.pan.endInclusive - r.pan.start),
                                 r.tilt.start + xy[1] * (r.tilt.endInclusive - r.tilt.start)
@@ -315,9 +331,9 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
                         val entries = p.type.enumValuesList
                         val i = localValues[key]?.firstOrNull()?.toInt() ?: -1
                         val e = entries.getOrNull(i)
-                        ValueButton(detail, { detail = !detail }, e?.let { enumSwatch(it) }, e?.caption() ?: "–")
+                        ValueButton(detail, { toggle("$key:detail") }, e?.let { enumSwatch(it) }, e?.caption() ?: "–")
                     }
-                    PropKind.STRING -> ValueButton(detail, { detail = !detail }, null, "Text")
+                    PropKind.STRING -> ValueButton(detail, { toggle("$key:detail") }, null, "Text")
                     PropKind.UNSUPPORTED -> Unit
                 }
             }
@@ -329,11 +345,11 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
                     androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         if (kind == PropKind.DOUBLE) androidx.compose.material3.DropdownMenuItem(
                             text = { Text(if (fanOpen) "Fächern ausblenden" else "Fächern …") },
-                            onClick = { fanOpen = !fanOpen; menu = false }
+                            onClick = { toggle("$key:fan"); menu = false }
                         )
                         androidx.compose.material3.DropdownMenuItem(
                             text = { Text(if (effects.isEmpty()) "Effekt hinzufügen …" else if (effectsOpen) "Effekte ausblenden" else "Effekte (${effects.size}) …") },
-                            onClick = { if (effects.isEmpty()) effectDialog = true else effectsOpen = !effectsOpen; menu = false }
+                            onClick = { if (effects.isEmpty()) effectDialog = true else toggle("$key:fx"); menu = false }
                         )
                         if (server != null) androidx.compose.material3.DropdownMenuItem(
                             text = { Text("Aus Programmer entfernen") },
@@ -344,7 +360,7 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
             } else androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
         }
         // ---------- aufgeklappte Details
-        if (detail || (kind == PropKind.STROBE && p.type.enumValuesCount > 0 && !compact)) {
+        if (detail) {
             Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 when (kind) {
                     PropKind.COLOR -> ColorDetail(key, p) { r, gg, b -> dm.setColor(g.id, p.id, r, gg, b) }
@@ -368,7 +384,7 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
                     PropKind.ENUM -> {
                         val entries = p.type.enumValuesList
                         EnumChips(entries.map { it.caption() }, localValues[key]?.firstOrNull()?.toInt() ?: -1, entries.map { enumSwatch(it) }) { i ->
-                            localValues[key] = listOf(i.toFloat()); dm.setEnum(g.id, p, entries[i]); detail = false
+                            localValues[key] = listOf(i.toFloat()); dm.setEnum(g.id, p, entries[i]); openPanel.value = null
                         }
                     }
                     PropKind.STROBE -> {
@@ -382,23 +398,49 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
                         var text by remember(key) { mutableStateOf("") }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             CompactSearch(text, { text = it }, "Text eingeben", Modifier.weight(1f))
-                            androidx.compose.material3.TextButton(onClick = { dm.setString(g.id, p.id, text); detail = false }) { Text("Setzen") }
+                            androidx.compose.material3.TextButton(onClick = { dm.setString(g.id, p.id, text); openPanel.value = null }) { Text("Setzen") }
                         }
                     }
                     else -> Unit
                 }
             }
         }
-        if (fanOpen && kind == PropKind.DOUBLE) Box(Modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp)) { FanControl(s, g, p) }
-        if (effectsOpen && effects.isNotEmpty()) Box(Modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp)) {
-            EffectsPanel(s, g, p, effects) { effectDialog = true }
-        }
+        if (fanOpen && kind == PropKind.DOUBLE) PanelFrame("Fächern") { FanControl(s, g, p) }
+        if (effectsOpen && effects.isNotEmpty()) PanelFrame("Effekte") { EffectsPanel(s, g, p, effects) { effectDialog = true } }
     }
-    if (effectDialog) EffectDialog(s, g, p) { effectDialog = false; effectsOpen = true }
+    if (effectDialog) EffectDialog(s, g, p) { added ->
+        effectDialog = false
+        if (added) openPanel.value = "$key:fx"
+    }
+}
+
+/**
+ * Welches Detailfeld gerade offen ist ("<gruppe>:<eigenschaft>:detail|fan|fx").
+ * Immer nur eines: Öffnen eines anderen schließt das vorherige, erneutes Antippen schließt es.
+ */
+private val openPanel = androidx.compose.runtime.mutableStateOf<String?>(null)
+
+private fun toggle(id: String) {
+    openPanel.value = if (openPanel.value == id) null else id
 }
 
 /** Gewählte Strobe-Art je Eigenschaft (bleibt beim Ziehen des Reglers erhalten). */
 private val strobeType = androidx.compose.runtime.mutableStateMapOf<String, LumosProtobuf.ValueTypes.EnumStringData>()
+
+/** Rahmen für aufgeklappte Bereiche mit Titel und Schließen-Pfeil. */
+@Composable
+private fun PanelFrame(title: String, content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, bottom = 8.dp)) {
+        Row(
+            Modifier.fillMaxWidth().height(32.dp).clickableNoRipple { openPanel.value = null }.padding(start = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(title, style = MaterialTheme.typography.labelMedium, color = Desk.Amber, modifier = Modifier.weight(1f))
+            Icon(Icons.Filled.ExpandLess, contentDescription = "Einklappen", tint = Desk.TextDim, modifier = Modifier.size(20.dp))
+        }
+        content()
+    }
+}
 
 /** Regler in der Zeile mit Wertanzeige rechts. */
 @Composable
@@ -642,7 +684,7 @@ private fun EffectsPanel(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePro
 
 /** Effektauswahl als Raster mit Symbolen, gruppiert wie in DMXControl (Effect 1D, Effect 2D, Filter …). */
 @Composable
-private fun EffectDialog(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePropertyDescriptor, onClose: () -> Unit) {
+private fun EffectDialog(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePropertyDescriptor, onClose: (added: Boolean) -> Unit) {
     val all by s.devices.attachables.collectAsStateWithLifecycle()
     val groups = remember(all) {
         all.groupBy { it.attachableGroup.ifBlank { it.type.ifBlank { "Weitere" } } }
@@ -657,7 +699,7 @@ private fun EffectDialog(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePro
             }
     }
     androidx.compose.material3.AlertDialog(
-        onDismissRequest = onClose,
+        onDismissRequest = { onClose(false) },
         title = { Text("Effekt für ${p.displayName.ifBlank { p.name }}") },
         text = {
             if (all.isEmpty()) {
@@ -678,7 +720,7 @@ private fun EffectDialog(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePro
                             val name = a.displayName.ifBlank { a.name }
                             Column(
                                 Modifier.clip(RoundedCornerShape(10.dp)).background(Desk.Raised)
-                                    .clickableNoRipple { s.devices.applyEffect(g.id, p.id, a); onClose() }
+                                    .clickableNoRipple { s.devices.applyEffect(g.id, p.id, a); onClose(true) }
                                     .padding(vertical = 8.dp, horizontal = 4.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
@@ -693,7 +735,7 @@ private fun EffectDialog(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePro
                 }
             }
         },
-        confirmButton = { androidx.compose.material3.TextButton(onClick = onClose) { Text("Schließen") } }
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { onClose(false) }) { Text("Schließen") } }
     )
 }
 
