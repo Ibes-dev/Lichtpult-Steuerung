@@ -65,9 +65,62 @@ private fun sameType(old: ObjectData?, d: Double): ObjectData = ObjectData.newBu
  * Auswahlliste -> Chips, Ja/Nein -> Schalter, Zahl mit Grenzen -> Regler, sonst Eingabefeld.
  */
 @Composable
-fun ParamEditor(p: DevParam, onSet: (ObjectData) -> Unit) {
+fun ParamEditor(
+    p: DevParam,
+    onSet: (ObjectData) -> Unit,
+    operators: List<String> = emptyList(),
+    onFan: ((from: Double, to: Double, op: String) -> Unit)? = null
+) {
     val v = p.value
     val label = p.label + (p.desc.unit.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "")
+    // Gefächerter Wert kommt als Text "a > b" zurück
+    val fannedText = v?.text()?.takeIf { t -> operators.any { it.isNotBlank() && it in t } || " > " in t }
+    var fanMode by remember(p.desc.name) { mutableStateOf(fannedText != null) }
+    val numeric = p.desc.enumValuesCount == 0 && v?.valueCase != ObjectData.ValueCase.BOOLVALUE && v?.valueCase != ObjectData.ValueCase.STRINGVALUE
+    if (onFan != null && (numeric || fannedText != null)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+            FilterChip(selected = fanMode, onClick = { fanMode = !fanMode }, label = { Text("Fächern") })
+        }
+        if (fanMode) {
+            FanParamRow(p, fannedText, operators, onFan)
+            return
+        }
+        ParamEditorBody(p, label = "", onSet = onSet)
+        return
+    }
+    ParamEditorBody(p, label, onSet)
+}
+
+/** Start/Ende/Verlauf für einen Effektparameter. */
+@Composable
+private fun FanParamRow(p: DevParam, current: String?, operators: List<String>, onFan: (Double, Double, String) -> Unit) {
+    val parts = current?.split(Regex("\\s*[^0-9.,\\-\\s]+\\s*"))?.filter { it.isNotBlank() }
+    var from by remember(p.desc.name) { mutableStateOf(parts?.getOrNull(0) ?: p.value?.text() ?: "0") }
+    var to by remember(p.desc.name) { mutableStateOf(parts?.getOrNull(1) ?: "0") }
+    val ops = operators.ifEmpty { listOf(">") }
+    var op by remember(p.desc.name, ops) { mutableStateOf(ops.firstOrNull { current?.contains(it) == true } ?: ops.first()) }
+    Column {
+        if (current != null) Text("Aktuell: $current", style = MaterialTheme.typography.labelSmall, color = Desk.Amber)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedTextField(from, { from = it }, label = { Text("Start") }, singleLine = true, modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+            OutlinedTextField(to, { to = it }, label = { Text("Ende") }, singleLine = true, modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+            TextButton(onClick = {
+                val a = from.replace(',', '.').toDoubleOrNull(); val b = to.replace(',', '.').toDoubleOrNull()
+                if (a != null && b != null) onFan(a, b, op)
+            }) { Text("Setzen") }
+        }
+        if (ops.size > 1) LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(ops) { o -> FilterChip(selected = op == o, onClick = { op = o }, label = { Text(o) }) }
+        }
+    }
+}
+
+@Composable
+private fun ParamEditorBody(p: DevParam, label: String, onSet: (ObjectData) -> Unit) {
+    val v = p.value
     when {
         p.desc.enumValuesCount > 0 -> Column {
             Text(label, style = MaterialTheme.typography.labelMedium)

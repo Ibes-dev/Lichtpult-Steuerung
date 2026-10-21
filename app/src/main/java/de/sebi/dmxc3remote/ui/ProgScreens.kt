@@ -657,6 +657,7 @@ private fun FanControl(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePrope
 private fun EffectsPanel(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePropertyDescriptor, effects: List<String>, onAdd: () -> Unit) {
     val names by s.devices.effectNames.collectAsStateWithLifecycle()
     val params by s.programmer.effectParams.collectAsStateWithLifecycle()
+    val operators by s.programmer.operators.collectAsStateWithLifecycle()
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Desk.Surface).padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -672,8 +673,13 @@ private fun EffectsPanel(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePro
             when {
                 list == null -> Text("Parameter werden geladen …", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
                 list.isEmpty() -> Text("Dieser Effekt hat keine einstellbaren Parameter.", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
-                else -> list.filter { it.isEditable() }.sortedBy { it.desc.saveOrder }.forEach { prm ->
-                    ParamEditor(prm) { v -> s.programmer.setEffectParam(id, prm.desc, v) }
+                else -> list.filter { it.isEditable() || (it.value?.text()?.contains(">") == true) }.sortedBy { it.desc.saveOrder }.forEach { prm ->
+                    ParamEditor(
+                        prm,
+                        onSet = { v -> s.programmer.setEffectParam(id, prm.desc, v) },
+                        operators = operators,
+                        onFan = { a, b, op -> s.programmer.setEffectParamFanned(id, prm.desc, a, b, op) }
+                    )
                 }
             }
             HorizontalDivider(color = Desk.Line)

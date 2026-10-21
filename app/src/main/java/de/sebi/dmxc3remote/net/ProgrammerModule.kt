@@ -332,6 +332,30 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
 
     fun loadEffectParams(attachableId: String) = act("Effektparameter") { readEffectParams(attachableId) }
 
+    /**
+     * Effektparameter fächern, z. B. Phase von 180° bis 0° über die Geräte.
+     * DMXControl zeigt gefächerte Parameter als Text "Start > Ende" (Device Control → Effects).
+     * Die App sendet genau diese Schreibweise als Text und prüft per Rücklesen, ob DMXControl sie
+     * übernommen hat. UNVERIFIZIERT: ob die Parameter-Schnittstelle Text für Zahlenparameter annimmt.
+     */
+    fun setEffectParamFanned(attachableId: String, desc: GenericParameterData, from: Double, to: Double, op: String) = act("Effekt fächern") {
+        fun fmt(d: Double) = java.math.BigDecimal(d).setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
+        val o = op.trim().ifBlank { ">" }
+        val text = "${fmt(from)} $o ${fmt(to)}"
+        parStub.dl(5).setParameterValue(
+            SetTestParameterValueRequest.newBuilder().setId(attachableId).setParameter(desc)
+                .setUserContextId(s.userContextId)
+                .setValue(LumosProtobuf.CommonTypes.ObjectData.newBuilder().setStringValue(text)).build(),
+            s.headers
+        ).requireOk(desc.displayName.ifBlank { desc.name })
+        readEffectParams(attachableId)
+        val back = _effectParams.value[attachableId]?.firstOrNull { it.desc.name == desc.name }?.value
+        val backText = back?.text().orEmpty()
+        Diag.note("Effekt fächern ${desc.name}: gesendet \"$text\", zurückgelesen \"$backText\" (${back?.valueCase})")
+        if (o in backText) s.emit("${desc.displayName.ifBlank { desc.name }}: $backText")
+        else s.emit("DMXControl hat den Fächer nicht übernommen (gelesen: ${backText.ifBlank { "leer" }})", isError = true)
+    }
+
     fun setEffectParam(attachableId: String, desc: GenericParameterData, value: LumosProtobuf.CommonTypes.ObjectData) =
         s.throttler.submit("eff:$attachableId:${desc.name}") {
             parStub.dl(5).setParameterValue(
