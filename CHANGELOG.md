@@ -7,6 +7,8 @@
   - Presets: aufrufen, zum Bearbeiten laden, Programmer übernehmen (Ersetzen, Zusammenführen, Anhängen, Abziehen), neues Preset anlegen
   - Cues: Cue zum Bearbeiten laden, Programmer als neuen Cue anhängen, Cue ersetzen oder zusammenführen; Laden wahlweise blind
   - Speichern zurück in den geladenen Cue bzw. das Preset, mit Rückfrage bei Abhängigkeiten wie in DMXControl
+- Programmer kompakt: Kopfzeile mit Symbolen (Blind, Rückgängig, Leeren, Speichern), schlanke Reiter, Eigenschaften als 48-dp-Zeilen mit Regler und Wert; Farbe, Position und Auswahllisten klappen bei Bedarf auf; Fächern, Effekte und Entfernen im ⋮-Menü
+- Effektauswahl als Raster mit Symbolen (Kurvenformen, Figuren, Filter), gruppiert nach Effect 1D, Effect 2D und Filter
 - Geräteliste mit DMX-Adressen (Suche nach Name, Nummer, Modell, Adresse); Adresse und einfache Geräteparameter bearbeitbar
 - Takt als Eingänge in der Eingangszuweisung: "Takt: Tap", "Takt: Beat", "Takt: Impuls", "Takt: BPM"
 - Cuelists: kompakte Zeilenansicht (umschaltbar, wird gespeichert) und Suche – für Projekte mit vielen Cuelists

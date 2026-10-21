@@ -219,3 +219,47 @@ fun RenameDialog(title: String, initial: String, onConfirm: (String) -> Unit, on
         dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Abbrechen") } }
     )
 }
+
+/** Kleiner Auswahl-Chip (30 dp hoch), z. B. für Gerätegruppen. */
+@Composable
+fun SmallChip(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .height(30.dp)
+            .clip(RoundedCornerShape(15.dp))
+            .background(if (selected) Desk.Amber else Desk.Raised)
+            .clickableNoRipple(onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) Color.Black else Desk.Text
+        )
+    }
+}
+
+/** Schlanke Reiter mit Unterstrich (36 dp hoch). */
+@Composable
+fun SmallTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth().height(36.dp)) {
+        labels.forEachIndexed { i, t ->
+            Column(
+                Modifier.weight(1f).fillMaxHeight().clickableNoRipple { onSelect(i) },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    t, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (i == selected) Desk.Amber else Desk.TextDim
+                )
+                Box(
+                    Modifier.padding(top = 4.dp).height(2.dp).width(28.dp)
+                        .background(if (i == selected) Desk.Amber else Color.Transparent)
+                )
+            }
+        }
+    }
+}

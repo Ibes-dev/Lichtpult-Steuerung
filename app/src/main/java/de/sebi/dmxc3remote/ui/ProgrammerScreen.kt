@@ -28,6 +28,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -82,42 +87,42 @@ fun ProgrammerScreen(s: UmbraSession) {
 
     Column(Modifier.fillMaxSize()) {
         ModuleError(err)
-        // ---------------------------------------------------------- Kopf
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)
-                .clip(RoundedCornerShape(12.dp)).background(Desk.Panel).padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        origin?.let { "Bearbeitet: ${it.label}" } ?: if (content.isEmpty()) "Programmer leer" else "Programmer",
-                        style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        (if (content.isEmpty()) "Keine Werte" else "${content.size} Werte") + " · " +
-                            if (blind) "blind, nicht auf der Bühne sichtbar" else "live auf der Bühne",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (blind) Desk.Cyan else Desk.TextDim
-                    )
-                }
-                FilterChip(selected = blind, onClick = { p.setBlind(!blind) }, label = { Text("Blind") })
-            }
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { saveOpen = true }, enabled = content.isNotEmpty()) { Text("Speichern …") }
-                OutlinedButton(onClick = p::undo) { Text("Rückgängig") }
-                OutlinedButton(onClick = { confirmClear = true }, enabled = content.isNotEmpty()) { Text("Leeren") }
-            }
-        }
-        // ---------------------------------------------------------- Bereiche
+        // ---------------------------------------------------------- Kopf (eine Zeile)
         Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            Modifier.fillMaxWidth().height(52.dp).padding(start = 12.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            listOf("Werte", "Inhalt" + if (content.isNotEmpty()) " (${content.size})" else "", "Presets", "Cues").forEachIndexed { i, t ->
-                FilterChip(selected = tab == i, onClick = { tab = i }, label = { Text(t) })
+            Column(Modifier.weight(1f)) {
+                Text(
+                    origin?.label ?: "Programmer",
+                    style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    (if (content.isEmpty()) "leer" else "${content.size} Werte") + " · " + if (blind) "blind" else "live",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (blind) Desk.Cyan else Desk.TextDim
+                )
+            }
+            IconButton(onClick = { p.setBlind(!blind) }) {
+                Icon(
+                    if (blind) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                    contentDescription = if (blind) "Blind: aus" else "Blind: ein",
+                    tint = if (blind) Desk.Cyan else Desk.TextDim
+                )
+            }
+            IconButton(onClick = p::undo) { Icon(Icons.Filled.Undo, contentDescription = "Rückgängig", tint = Desk.TextDim) }
+            IconButton(onClick = { confirmClear = true }, enabled = content.isNotEmpty()) {
+                Icon(Icons.Filled.DeleteSweep, contentDescription = "Programmer leeren", tint = if (content.isNotEmpty()) Desk.TextDim else Desk.Line)
+            }
+            IconButton(onClick = { saveOpen = true }, enabled = content.isNotEmpty()) {
+                Icon(Icons.Filled.Save, contentDescription = "Speichern", tint = if (content.isNotEmpty()) Desk.Amber else Desk.Line)
             }
         }
+        SmallTabs(
+            listOf("Werte", if (content.isEmpty()) "Inhalt" else "Inhalt ${content.size}", "Presets", "Cues"),
+            tab, { tab = it }
+        )
+        HorizontalDivider(color = Desk.Line)
         Box(Modifier.fillMaxSize()) {
             when (tab) {
                 0 -> ProgrammerValuesTab(s, focusGroup)
@@ -186,8 +191,8 @@ private fun ContentTab(s: UmbraSession, content: List<GroupState>, onOpen: (Stri
         byGroup.forEach { (grp, rows) ->
             item(key = grp.first) {
                 Column(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Desk.Panel).padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Desk.Panel).padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(grp.second, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))

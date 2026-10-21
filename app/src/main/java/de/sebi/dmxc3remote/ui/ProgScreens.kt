@@ -24,11 +24,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -93,18 +98,6 @@ internal fun ProgrammerValuesTab(s: UmbraSession, focusGroup: String?) {
 
     Column(Modifier.fillMaxSize()) {
         ModuleError(err)
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                group?.name?.ifBlank { null } ?: "Gruppe wählen",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
         if (isWide()) {
             // Tablet: Gruppenliste links, Eigenschaften und Presets rechts
             Row(Modifier.fillMaxSize()) {
@@ -120,12 +113,12 @@ internal fun ProgrammerValuesTab(s: UmbraSession, focusGroup: String?) {
             }
         } else {
             LazyRow(
-                Modifier.fillMaxWidth(),
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 contentPadding = PaddingValues(horizontal = 10.dp)
             ) {
                 items(sortedGroups, key = { it.id }) { g ->
-                    FilterChip(selected = selected == g.id, onClick = { select(g.id) }, label = { Text(g.name.ifBlank { "Gruppe ${g.number}" }, maxLines = 1) })
+                    SmallChip(g.name.ifBlank { "Gruppe ${g.number}" }, selected == g.id, { select(g.id) })
                 }
             }
             PropertyPane(s, group, presets.values.sortedBy { it.name }.map { it.presetId to it.name }, presetErr, Modifier.fillMaxSize())
@@ -178,8 +171,8 @@ internal fun PropertyPane(
     }
     LazyColumn(
         modifier,
-        contentPadding = PaddingValues(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         if (group == null) {
             item {
@@ -229,6 +222,11 @@ private fun PresetGrid(items: List<Pair<String, String>>, onClick: (String) -> U
 /** Lokaler Anzeigewert je Gruppe/Eigenschaft (der Server liefert hier keinen Push). */
 private val localValues = mutableStateMapOf<String, List<Float>>()
 
+/**
+ * Eine Eigenschaft als kompakte Zeile (48 dp): Name · Bedienelement · Wert · Menü.
+ * Farbe, Position, Auswahllisten und Texte klappen bei Bedarf ein Detailfeld auf.
+ * Links markiert ein Balken, dass der Wert im Programmer steht.
+ */
 @Composable
 private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePropertyDescriptor, compact: Boolean = false) {
     val key = "${g.id}:${p.id}"
@@ -239,199 +237,241 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
     val appliedMap by dm.applied.collectAsStateWithLifecycle()
     val server = serverValue(g.id, p, progValues, fannedMap)
     val kind = p.kind(server?.valueCase)
-    // Rücklesen: Wert aus dem DMXControl-Programmer übernehmen (auch Änderungen vom PC)
     LaunchedEffect(server) { server?.let { v -> fromServer(v, p, kind)?.let { localValues[key] = it } } }
     var effectDialog by remember { mutableStateOf(false) }
     var fanOpen by remember { mutableStateOf(false) }
     var effectsOpen by remember { mutableStateOf(false) }
-    Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Desk.Panel).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        run {
-            when (kind) {
-                PropKind.DOUBLE -> {
-                    val range = p.doubleRange()
-                    val v = localValues[key]?.firstOrNull() ?: range.start.toFloat()
-                    Text("$label  ${"%.2f".format(v)}", style = MaterialTheme.typography.labelLarge)
-                    Slider(
-                        value = v,
-                        onValueChange = { nv ->
-                            localValues[key] = listOf(nv)
-                            dm.setDouble(g.id, p.id, nv.toDouble())
-                        },
-                        valueRange = range.start.toFloat()..range.endInclusive.toFloat()
-                    )
+    var detail by remember(key) { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
+    val fanned = fannedMap[key]
+    val reallyFanned = fanned != null && fanned.fannedValuesList.map { it.toByteString() }.distinct().size > 1
+    val effects = appliedMap[key] ?: emptyList()
+    val inProg = server != null || reallyFanned || effects.isNotEmpty()
+
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Desk.Panel)) {
+        Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(3.dp).fillMaxHeight().background(if (inProg) Desk.Amber else Color.Transparent))
+            Column(Modifier.width(92.dp).padding(start = 9.dp)) {
+                Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val tags = buildList {
+                    if (reallyFanned) add("gefächert")
+                    if (effects.isNotEmpty()) add("${effects.size} Effekt" + if (effects.size > 1) "e" else "")
                 }
-                PropKind.COLOR -> {
-                    val max = p.colorMax()
-                    val rgb = localValues[key] ?: listOf(1f, 1f, 1f)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
-                        Box(
-                            Modifier.size(28.dp).clip(RoundedCornerShape(4.dp))
-                                .background(Color(rgb[0], rgb[1], rgb[2]))
+                if (tags.isNotEmpty()) Text(tags.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = Desk.Amber, maxLines = 1)
+            }
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                when (kind) {
+                    PropKind.DOUBLE -> {
+                        val r = p.doubleRange()
+                        val v = localValues[key]?.firstOrNull() ?: r.start.toFloat()
+                        RowSlider(v, r.start.toFloat()..r.endInclusive.toFloat(), "%.2f".format(v)) { nv ->
+                            localValues[key] = listOf(nv); dm.setDouble(g.id, p.id, nv.toDouble())
+                        }
+                    }
+                    PropKind.KELVIN -> {
+                        val r = p.kelvinRange()
+                        val v = localValues[key]?.firstOrNull() ?: ((r.start + r.endInclusive) / 2).toFloat()
+                        RowSlider(v, r.start.toFloat()..r.endInclusive.toFloat(), "${v.toInt()} K") { nv ->
+                            localValues[key] = listOf(nv); dm.setKelvin(g.id, p.id, nv.toDouble())
+                        }
+                    }
+                    PropKind.MULTIDOUBLE -> {
+                        val r = p.multiRange()
+                        val v = localValues[key]?.firstOrNull() ?: r.start.toFloat()
+                        RowSlider(v, r.start.toFloat()..r.endInclusive.toFloat(), "%.2f".format(v)) { nv ->
+                            localValues[key] = listOf(nv); dm.setMultiDouble(g.id, p.id, p.multiKeys(), nv.toDouble())
+                        }
+                    }
+                    PropKind.STROBE -> {
+                        val r = p.strobeRange()
+                        val v = localValues[key]?.firstOrNull() ?: r.start.toFloat()
+                        RowSlider(v, r.start.toFloat()..r.endInclusive.toFloat(), "%.1f".format(v)) { nv ->
+                            localValues[key] = listOf(nv); dm.setStrobe(g.id, p.id, nv.toDouble(), strobeType[key])
+                        }
+                    }
+                    PropKind.BOOL -> {
+                        val on = (localValues[key]?.firstOrNull() ?: 0f) > 0.5f
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            Switch(checked = on, onCheckedChange = { c ->
+                                localValues[key] = listOf(if (c) 1f else 0f); dm.setBool(g.id, p.id, c)
+                            })
+                        }
+                    }
+                    PropKind.COLOR -> {
+                        val rgb = localValues[key] ?: listOf(1f, 1f, 1f)
+                        ValueButton(detail, { detail = !detail }, Color(rgb[0], rgb[1], rgb[2]),
+                            "%.0f · %.0f · %.0f %%".format(rgb[0] * 100, rgb[1] * 100, rgb[2] * 100))
+                    }
+                    PropKind.POSITION -> {
+                        val r = p.positionRange()
+                        val xy = localValues[key] ?: listOf(0.5f, 0.5f)
+                        ValueButton(detail, { detail = !detail }, null,
+                            "Pan %.0f · Tilt %.0f".format(
+                                r.pan.start + xy[0] * (r.pan.endInclusive - r.pan.start),
+                                r.tilt.start + xy[1] * (r.tilt.endInclusive - r.tilt.start)
+                            ))
+                    }
+                    PropKind.ENUM -> {
+                        val entries = p.type.enumValuesList
+                        val i = localValues[key]?.firstOrNull()?.toInt() ?: -1
+                        val e = entries.getOrNull(i)
+                        ValueButton(detail, { detail = !detail }, e?.let { enumSwatch(it) }, e?.caption() ?: "–")
+                    }
+                    PropKind.STRING -> ValueButton(detail, { detail = !detail }, null, "Text")
+                    PropKind.UNSUPPORTED -> Unit
+                }
+            }
+            if (!compact) {
+                Box {
+                    androidx.compose.material3.IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = "Mehr zu $label", tint = Desk.TextDim)
+                    }
+                    androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        if (kind == PropKind.DOUBLE) androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(if (fanOpen) "Fächern ausblenden" else "Fächern …") },
+                            onClick = { fanOpen = !fanOpen; menu = false }
+                        )
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(if (effects.isEmpty()) "Effekt hinzufügen …" else if (effectsOpen) "Effekte ausblenden" else "Effekte (${effects.size}) …") },
+                            onClick = { if (effects.isEmpty()) effectDialog = true else effectsOpen = !effectsOpen; menu = false }
+                        )
+                        if (server != null) androidx.compose.material3.DropdownMenuItem(
+                            text = { Text("Aus Programmer entfernen") },
+                            onClick = { s.programmer.remove(g.id, p.id); menu = false }
                         )
                     }
-                    listOf("R", "G", "B").forEachIndexed { i, c ->
+                }
+            } else androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
+        }
+        // ---------- aufgeklappte Details
+        if (detail || (kind == PropKind.STROBE && p.type.enumValuesCount > 0 && !compact)) {
+            Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                when (kind) {
+                    PropKind.COLOR -> ColorDetail(key, p) { r, gg, b -> dm.setColor(g.id, p.id, r, gg, b) }
+                    PropKind.POSITION -> {
+                        val r = p.positionRange()
+                        val xy = localValues[key] ?: listOf(0.5f, 0.5f)
+                        XYPad(
+                            xy[0], xy[1],
+                            { x, y ->
+                                localValues[key] = listOf(x, y)
+                                dm.setPosition(
+                                    g.id, p.id,
+                                    r.pan.start + x * (r.pan.endInclusive - r.pan.start),
+                                    r.tilt.start + y * (r.tilt.endInclusive - r.tilt.start)
+                                )
+                            },
+                            MaterialTheme.colorScheme.primary,
+                            Modifier.fillMaxWidth().aspectRatio(2f)
+                        )
+                    }
+                    PropKind.ENUM -> {
+                        val entries = p.type.enumValuesList
+                        EnumChips(entries.map { it.caption() }, localValues[key]?.firstOrNull()?.toInt() ?: -1, entries.map { enumSwatch(it) }) { i ->
+                            localValues[key] = listOf(i.toFloat()); dm.setEnum(g.id, p, entries[i]); detail = false
+                        }
+                    }
+                    PropKind.STROBE -> {
+                        val types = p.type.enumValuesList.filter { it.valueCase == LumosProtobuf.ValueTypes.IEnumObjectData.ValueCase.ENUMSTRING }
+                        if (types.isNotEmpty()) EnumChips(types.map { it.caption() }, types.indexOfFirst { it.enumString == strobeType[key] }) { i ->
+                            strobeType[key] = types[i].enumString
+                            dm.setStrobe(g.id, p.id, (localValues[key]?.firstOrNull() ?: 0f).toDouble(), types[i].enumString)
+                        }
+                    }
+                    PropKind.STRING -> {
+                        var text by remember(key) { mutableStateOf("") }
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(c, modifier = Modifier.widthIn(min = 16.dp))
-                            Slider(
-                                value = rgb[i],
-                                onValueChange = { nv ->
-                                    val next = rgb.toMutableList().also { it[i] = nv }
-                                    localValues[key] = next
-                                    dm.setColor(g.id, p.id, next[0] * max, next[1] * max, next[2] * max)
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
+                            CompactSearch(text, { text = it }, "Text eingeben", Modifier.weight(1f))
+                            androidx.compose.material3.TextButton(onClick = { dm.setString(g.id, p.id, text); detail = false }) { Text("Setzen") }
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf(
-                            Color.White, Color.Red, Color(0xFFFF8000), Color.Yellow, Color.Green,
-                            Color.Cyan, Color.Blue, Color.Magenta
-                        ).forEach { c ->
-                            Box(
-                                Modifier.weight(1f).aspectRatio(1f).clip(RoundedCornerShape(4.dp)).background(c)
-                                    .then(
-                                        Modifier.clickableNoRipple {
-                                            localValues[key] = listOf(c.red, c.green, c.blue)
-                                            dm.setColor(g.id, p.id, c.red * max, c.green * max, c.blue * max)
-                                        }
-                                    )
-                            )
-                        }
-                    }
-                }
-                PropKind.POSITION -> {
-                    val r = p.positionRange()
-                    val xy = localValues[key] ?: listOf(0.5f, 0.5f)
-                    val pan = r.pan.start + xy[0] * (r.pan.endInclusive - r.pan.start)
-                    val tilt = r.tilt.start + xy[1] * (r.tilt.endInclusive - r.tilt.start)
-                    Text("$label  ${"Pan %.1f  Tilt %.1f".format(pan, tilt)}", style = MaterialTheme.typography.labelLarge)
-                    XYPad(
-                        xy[0], xy[1],
-                        { x, y ->
-                            localValues[key] = listOf(x, y)
-                            dm.setPosition(
-                                g.id, p.id,
-                                r.pan.start + x * (r.pan.endInclusive - r.pan.start),
-                                r.tilt.start + y * (r.tilt.endInclusive - r.tilt.start)
-                            )
-                        },
-                        MaterialTheme.colorScheme.primary,
-                        Modifier.fillMaxWidth().aspectRatio(1.6f)
-                    )
-                }
-                PropKind.BOOL -> {
-                    val on = (localValues[key]?.firstOrNull() ?: 0f) > 0.5f
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
-                        Switch(checked = on, onCheckedChange = { c ->
-                            localValues[key] = listOf(if (c) 1f else 0f)
-                            dm.setBool(g.id, p.id, c)
-                        })
-                    }
-                }
-                PropKind.KELVIN -> {
-                    val r = p.kelvinRange()
-                    val v = localValues[key]?.firstOrNull() ?: ((r.start + r.endInclusive) / 2).toFloat()
-                    Text("$label  ${v.toInt()} K", style = MaterialTheme.typography.labelLarge)
-                    Slider(
-                        value = v.coerceIn(r.start.toFloat(), r.endInclusive.toFloat()),
-                        onValueChange = { nv -> localValues[key] = listOf(nv); dm.setKelvin(g.id, p.id, nv.toDouble()) },
-                        valueRange = r.start.toFloat()..r.endInclusive.toFloat()
-                    )
-                }
-                PropKind.STROBE -> {
-                    val r = p.strobeRange()
-                    val v = localValues[key]?.firstOrNull() ?: r.start.toFloat()
-                    val types = p.type.enumValuesList.filter {
-                        it.valueCase == LumosProtobuf.ValueTypes.IEnumObjectData.ValueCase.ENUMSTRING
-                    }
-                    var sel by remember(key) { mutableStateOf(types.firstOrNull()?.enumString) }
-                    Text("$label  ${"%.1f".format(v)}", style = MaterialTheme.typography.labelLarge)
-                    Slider(
-                        value = v.coerceIn(r.start.toFloat(), r.endInclusive.toFloat()),
-                        onValueChange = { nv -> localValues[key] = listOf(nv); dm.setStrobe(g.id, p.id, nv.toDouble(), sel) },
-                        valueRange = r.start.toFloat()..r.endInclusive.toFloat()
-                    )
-                    if (types.isNotEmpty()) EnumChips(types.map { it.caption() }, types.indexOfFirst { it.enumString == sel }) { i ->
-                        sel = types[i].enumString
-                        dm.setStrobe(g.id, p.id, v.toDouble(), sel)
-                    }
-                }
-                PropKind.STRING -> {
-                    var text by remember(key) { mutableStateOf("") }
-                    Text(label, style = MaterialTheme.typography.labelLarge)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(text, { text = it }, singleLine = true, modifier = Modifier.weight(1f))
-                        androidx.compose.material3.TextButton(onClick = { dm.setString(g.id, p.id, text) }) { Text("Setzen") }
-                    }
-                }
-                PropKind.MULTIDOUBLE -> {
-                    val r = p.multiRange()
-                    val v = localValues[key]?.firstOrNull() ?: r.start.toFloat()
-                    Text("$label  ${"%.2f".format(v)}", style = MaterialTheme.typography.labelLarge)
-                    Slider(
-                        value = v.coerceIn(r.start.toFloat(), r.endInclusive.toFloat()),
-                        onValueChange = { nv -> localValues[key] = listOf(nv); dm.setMultiDouble(g.id, p.id, p.multiKeys(), nv.toDouble()) },
-                        valueRange = r.start.toFloat()..r.endInclusive.toFloat()
-                    )
-                    if (p.multiKeys().size > 1) Text("Wirkt auf alle ${p.multiKeys().size} Teilwerte gleich", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
-                }
-                PropKind.ENUM -> {
-                    val entries = p.type.enumValuesList
-                    val selIdx = localValues[key]?.firstOrNull()?.toInt() ?: -1
-                    Text(label, style = MaterialTheme.typography.labelLarge)
-                    EnumChips(entries.map { it.caption() }, selIdx, entries.map { e ->
-                        if (e.valueCase == LumosProtobuf.ValueTypes.IEnumObjectData.ValueCase.ENUMCOLOR && e.enumColor.hasColor())
-                            Color(e.enumColor.color.r, e.enumColor.color.g, e.enumColor.color.b) else null
-                    }) { i ->
-                        localValues[key] = listOf(i.toFloat())
-                        dm.setEnum(g.id, p, entries[i])
-                    }
-                }
-                PropKind.UNSUPPORTED -> Unit
-            }
-        }
-        val fanned = fannedMap[key]
-        // "gefächert" nur, wenn die Geräte wirklich unterschiedliche Werte haben
-        val reallyFanned = fanned != null && fanned.fannedValuesList.map { it.toByteString() }.distinct().size > 1
-        val effects = appliedMap[key] ?: emptyList()
-        if (server != null || reallyFanned || effects.isNotEmpty()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    buildList {
-                        add(if (reallyFanned) "Gefächert" + (fanned!!.operator.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "") else "Im Programmer")
-                        if (effects.isNotEmpty()) add("${effects.size} Effekt" + if (effects.size > 1) "e" else "")
-                    }.joinToString(" · "),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Desk.Amber,
-                    modifier = Modifier.weight(1f)
-                )
-                if (!compact && server != null) {
-                    androidx.compose.material3.TextButton(onClick = { s.programmer.remove(g.id, p.id) }) { Text("Entfernen") }
+                    else -> Unit
                 }
             }
         }
-        if (!compact) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (kind == PropKind.DOUBLE) {
-                    FilterChip(selected = fanOpen, onClick = { fanOpen = !fanOpen }, label = { Text("Fächern") })
-                }
-                FilterChip(
-                    selected = effectsOpen,
-                    onClick = { effectsOpen = !effectsOpen },
-                    label = { Text(if (effects.isEmpty()) "Effekte" else "Effekte (${effects.size})") }
-                )
-            }
+        if (fanOpen && kind == PropKind.DOUBLE) Box(Modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp)) { FanControl(s, g, p) }
+        if (effectsOpen && effects.isNotEmpty()) Box(Modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp)) {
+            EffectsPanel(s, g, p, effects) { effectDialog = true }
         }
-        if (fanOpen && kind == PropKind.DOUBLE) FanControl(s, g, p)
-        if (effectsOpen) EffectsPanel(s, g, p, effects) { effectDialog = true }
     }
-    if (effectDialog) EffectDialog(s, g, p) { effectDialog = false }
+    if (effectDialog) EffectDialog(s, g, p) { effectDialog = false; effectsOpen = true }
+}
+
+/** Gewählte Strobe-Art je Eigenschaft (bleibt beim Ziehen des Reglers erhalten). */
+private val strobeType = androidx.compose.runtime.mutableStateMapOf<String, LumosProtobuf.ValueTypes.EnumStringData>()
+
+/** Regler in der Zeile mit Wertanzeige rechts. */
+@Composable
+private fun RowSlider(v: Float, range: ClosedFloatingPointRange<Float>, text: String, onChange: (Float) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Slider(v.coerceIn(range.start, range.endInclusive), onChange, Modifier.weight(1f).height(36.dp), valueRange = range)
+        Text(
+            text, style = MaterialTheme.typography.labelMedium.merge(Numeric), color = Desk.TextDim,
+            maxLines = 1, modifier = Modifier.width(52.dp).padding(start = 6.dp)
+        )
+    }
+}
+
+/** Wert als antippbare Fläche (öffnet das Detailfeld), optional mit Farbfeld. */
+@Composable
+private fun ValueButton(open: Boolean, onClick: () -> Unit, swatch: Color?, text: String) {
+    Row(
+        Modifier.fillMaxWidth().height(34.dp).padding(end = 4.dp).clip(RoundedCornerShape(6.dp))
+            .background(if (open) Desk.Raised else Color.Transparent)
+            .clickableNoRipple(onClick).padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (swatch != null) {
+            Box(Modifier.size(18.dp).clip(RoundedCornerShape(4.dp)).background(swatch))
+            Box(Modifier.width(8.dp))
+        }
+        Text(text, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Icon(
+            if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+            contentDescription = null, tint = Desk.TextDim, modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+private fun enumSwatch(e: LumosProtobuf.ValueTypes.IEnumObjectData): Color? =
+    if (e.valueCase == LumosProtobuf.ValueTypes.IEnumObjectData.ValueCase.ENUMCOLOR && e.enumColor.hasColor())
+        Color(e.enumColor.color.r, e.enumColor.color.g, e.enumColor.color.b) else null
+
+/** Farbe: Schnellwahl und drei schlanke RGB-Regler. */
+@Composable
+private fun ColorDetail(key: String, p: DevicePropertyDescriptor, send: (Double, Double, Double) -> Unit) {
+    val max = p.colorMax()
+    val rgb = localValues[key] ?: listOf(1f, 1f, 1f)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf(
+            Color.White, Color.Red, Color(0xFFFF8000), Color.Yellow, Color.Green,
+            Color.Cyan, Color.Blue, Color.Magenta
+        ).forEach { c ->
+            Box(
+                Modifier.weight(1f).height(28.dp).clip(RoundedCornerShape(6.dp)).background(c)
+                    .clickableNoRipple {
+                        localValues[key] = listOf(c.red, c.green, c.blue)
+                        send(c.red * max, c.green * max, c.blue * max)
+                    }
+            )
+        }
+    }
+    listOf("R" to Color(0xFFE5484D), "G" to Color(0xFF5BD18B), "B" to Color(0xFF4C8DE5)).forEachIndexed { i, (n, col) ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(n, style = MaterialTheme.typography.labelMedium, color = col, modifier = Modifier.width(16.dp))
+            Slider(
+                rgb[i],
+                { nv ->
+                    val next = rgb.toMutableList().also { it[i] = nv }
+                    localValues[key] = next
+                    send(next[0] * max, next[1] * max, next[2] * max)
+                },
+                Modifier.weight(1f).height(32.dp),
+                colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = col, activeTrackColor = col)
+            )
+            Text("%.0f".format(rgb[i] * 100), style = MaterialTheme.typography.labelSmall.merge(Numeric), color = Desk.TextDim, modifier = Modifier.width(32.dp))
+        }
+    }
 }
 
 /** Server-Wert in die lokale Darstellung (normiert wie die Bedienelemente) umrechnen. */
@@ -582,7 +622,8 @@ private fun EffectsPanel(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePro
         effects.forEach { id ->
             LaunchedEffect(id) { if (params[id] == null) s.programmer.loadEffectParams(id) }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(names[id] ?: "Effekt", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                EffectIcon(names[id] ?: "", Modifier.size(24.dp), Desk.Amber)
+                Text(names[id] ?: "Effekt", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f).padding(start = 8.dp))
                 androidx.compose.material3.TextButton(onClick = { s.devices.removeEffect(g.id, p.id, id) }) { Text("Entfernen") }
             }
             val list = params[id]
@@ -599,9 +640,22 @@ private fun EffectsPanel(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePro
     }
 }
 
+/** Effektauswahl als Raster mit Symbolen, gruppiert wie in DMXControl (Effect 1D, Effect 2D, Filter …). */
 @Composable
 private fun EffectDialog(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePropertyDescriptor, onClose: () -> Unit) {
     val all by s.devices.attachables.collectAsStateWithLifecycle()
+    val groups = remember(all) {
+        all.groupBy { it.attachableGroup.ifBlank { it.type.ifBlank { "Weitere" } } }
+            .toList()
+            .sortedBy { (k, _) ->
+                when {
+                    k.contains("1D", true) -> 0
+                    k.contains("2D", true) -> 1
+                    k.contains("filter", true) -> 3
+                    else -> 2
+                }
+            }
+    }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Effekt für ${p.displayName.ifBlank { p.name }}") },
@@ -609,15 +663,31 @@ private fun EffectDialog(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePro
             if (all.isEmpty()) {
                 Text("DMXControl hat keine Effekte gemeldet.", color = Desk.TextDim)
             } else {
-                LazyColumn(Modifier.height(400.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    items(all) { a ->
-                        Column(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Desk.Raised)
-                                .clickableNoRipple { s.devices.applyEffect(g.id, p.id, a); onClose() }
-                                .padding(10.dp)
-                        ) {
-                            Text(a.displayName.ifBlank { a.name })
-                            if (a.attachableGroup.isNotBlank()) Text(a.attachableGroup, style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
+                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                    androidx.compose.foundation.lazy.grid.GridCells.Adaptive(84.dp),
+                    Modifier.height(460.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    groups.forEach { (grp, list) ->
+                        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                            Text(grp, style = MaterialTheme.typography.labelMedium, color = Desk.Amber, modifier = Modifier.padding(top = 6.dp))
+                        }
+                        items(list.size) { i ->
+                            val a = list[i]
+                            val name = a.displayName.ifBlank { a.name }
+                            Column(
+                                Modifier.clip(RoundedCornerShape(10.dp)).background(Desk.Raised)
+                                    .clickableNoRipple { s.devices.applyEffect(g.id, p.id, a); onClose() }
+                                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                EffectIcon(a.name + " " + a.displayName, Modifier.size(36.dp), Desk.Text)
+                                Text(
+                                    name, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
                         }
                     }
                 }
