@@ -44,6 +44,21 @@ fun DevParam.isEditable(): Boolean {
     }
 }
 
+/**
+ * Zahlenparameter laut Typangabe von DMXControl (parameterValueType_AQ, z. B. "System.Double").
+ * Nur diese lassen sich fächern – nicht Auswahl-, Ja/Nein- oder Modus-Parameter wie "Load Mode".
+ */
+fun DevParam.isNumeric(): Boolean {
+    if (desc.enumValuesCount > 0) return false
+    val aq = desc.parameterValueTypeAQ.substringBefore(',').substringAfterLast('.').lowercase()
+    if (aq.isNotBlank()) return aq in setOf("double", "single", "decimal", "int16", "int32", "int64", "uint16", "uint32", "uint64", "byte", "sbyte")
+    return when (value?.valueCase) {
+        ObjectData.ValueCase.DOUBLEVALUE, ObjectData.ValueCase.FLOATVALUE, ObjectData.ValueCase.INTVALUE,
+        ObjectData.ValueCase.LONGVALUE, ObjectData.ValueCase.UINTVALUE, ObjectData.ValueCase.ULONGVALUE -> true
+        else -> false
+    }
+}
+
 /** Neuer Wert im selben Typ wie der bisherige. */
 private fun sameType(old: ObjectData?, d: Double): ObjectData = ObjectData.newBuilder().apply {
     when (old?.valueCase) {
@@ -73,11 +88,11 @@ fun ParamEditor(
 ) {
     val v = p.value
     val label = p.label + (p.desc.unit.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "")
-    // Gefächerter Wert kommt als Text "a > b" zurück
-    val fannedText = v?.text()?.takeIf { t -> operators.any { it.isNotBlank() && it in t } || " > " in t }
+    val numeric = p.isNumeric()
+    // Gefächerter Wert kommt als Text "a > b" zurück – nur bei Zahlenparametern auswerten
+    val fannedText = if (!numeric) null else v?.text()?.takeIf { t -> Regex("""-?\d+([.,]\d+)?\s*\S+\s*-?\d""").containsMatchIn(t) && !t.trim().matches(Regex("""-?\d+([.,]\d+)?""")) }
     var fanMode by remember(p.desc.name) { mutableStateOf(fannedText != null) }
-    val numeric = p.desc.enumValuesCount == 0 && v?.valueCase != ObjectData.ValueCase.BOOLVALUE && v?.valueCase != ObjectData.ValueCase.STRINGVALUE
-    if (onFan != null && (numeric || fannedText != null)) {
+    if (onFan != null && numeric) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
             FilterChip(selected = fanMode, onClick = { fanMode = !fanMode }, label = { Text("Fächern") })

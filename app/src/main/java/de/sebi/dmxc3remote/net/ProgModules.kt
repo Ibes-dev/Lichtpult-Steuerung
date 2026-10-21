@@ -453,6 +453,27 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
         _applied.update { m -> m + ("$groupId:$propertyId" to ((m["$groupId:$propertyId"] ?: emptyList()) - id)) }
     }
 
+    /** Alle Effekte einer Eigenschaft löschen (ohne eigene Fehlerbehandlung, für Programmer-Aktionen). */
+    suspend fun deleteEffects(groupId: String, propertyId: String) {
+        val key = "$groupId:$propertyId"
+        (_applied.value[key] ?: emptyList()).forEach { id -> runCatching { deleteAttachable(id) } }
+        _applied.update { it - key }
+    }
+
+    /** Alle in dieser Sitzung angelegten Effekte löschen. */
+    suspend fun deleteAllEffects() {
+        _applied.value.values.flatten().forEach { id -> runCatching { deleteAttachable(id) } }
+        _applied.value = emptyMap()
+    }
+
+    private suspend fun deleteAttachable(id: String) {
+        progStub.dl(5).deleteProgrammerAttachable(
+            DeleteProgrammerAttachableRequest.newBuilder().setRequestId(s.nextRequestId()).setAttachableId(id)
+                .setUserContextId(s.userContextId).build(),
+            s.headers
+        ).requireOk("DeleteProgrammerAttachable")
+    }
+
     fun removeEffects(groupId: String, propertyId: String) = act("Effekte entfernen") {
         val key = "$groupId:$propertyId"
         (_applied.value[key] ?: emptyList()).forEach { id ->

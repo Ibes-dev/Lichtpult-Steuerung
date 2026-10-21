@@ -264,12 +264,17 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
     // ---------------------------------------------------------------- Bearbeiten
     fun undo() = act("Rückgängig") { delete(DeleteProgrammerValueRequest.EClearMode.UNDO) }
     fun clear() = act("Programmer leeren") {
+        // Über die Schnittstelle angelegte Effekte entfernt CLEAR nicht zuverlässig (bleiben als "Geist"
+        // in DMXControl stehen) – deshalb vorher einzeln löschen.
+        s.devices.deleteAllEffects()
         delete(DeleteProgrammerValueRequest.EClearMode.CLEAR)
         _origin.value = null
+        _effectParams.value = emptyMap()
     }
 
     /** Eine Eigenschaft einer Gruppe aus dem Programmer nehmen. */
     fun remove(groupId: String, propertyId: String) = act("Entfernen") {
+        s.devices.deleteEffects(groupId, propertyId)
         delete(DeleteProgrammerValueRequest.EClearMode.DELETE) { it.setGroupId(groupId).addPropertyIds(propertyId) }
     }
 
@@ -342,6 +347,7 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
         fun fmt(d: Double) = java.math.BigDecimal(d).setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
         val o = op.trim().ifBlank { ">" }
         val text = "${fmt(from)} $o ${fmt(to)}"
+        val before = _effectParams.value[attachableId]?.associate { it.desc.name to it.value?.text().orEmpty() } ?: emptyMap()
         parStub.dl(5).setParameterValue(
             SetTestParameterValueRequest.newBuilder().setId(attachableId).setParameter(desc)
                 .setUserContextId(s.userContextId)
@@ -352,6 +358,12 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
         val back = _effectParams.value[attachableId]?.firstOrNull { it.desc.name == desc.name }?.value
         val backText = back?.text().orEmpty()
         Diag.note("Effekt fächern ${desc.name}: gesendet \"$text\", zurückgelesen \"$backText\" (${back?.valueCase})")
+        // Kontrolle: hat sich ein anderer Parameter geändert als der gewünschte?
+        _effectParams.value[attachableId]?.forEach { prm ->
+            val now = prm.value?.text().orEmpty()
+            if (prm.desc.name != desc.name && before[prm.desc.name] != null && before[prm.desc.name] != now)
+                Diag.note("Effekt fächern: unerwartet geändert ${prm.desc.name}: \"${before[prm.desc.name]}\" -> \"$now\"")
+        }
         if (o in backText) s.emit("${desc.displayName.ifBlank { desc.name }}: $backText")
         else s.emit("DMXControl hat den Fächer nicht übernommen (gelesen: ${backText.ifBlank { "leer" }})", isError = true)
     }

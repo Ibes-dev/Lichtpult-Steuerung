@@ -673,7 +673,7 @@ private fun EffectsPanel(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePro
             when {
                 list == null -> Text("Parameter werden geladen …", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
                 list.isEmpty() -> Text("Dieser Effekt hat keine einstellbaren Parameter.", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
-                else -> list.filter { it.isEditable() || (it.value?.text()?.contains(">") == true) }.sortedBy { it.desc.saveOrder }.forEach { prm ->
+                else -> list.filter { it.isEditable() || it.isNumeric() }.sortedBy { it.desc.saveOrder }.forEach { prm ->
                     ParamEditor(
                         prm,
                         onSet = { v -> s.programmer.setEffectParam(id, prm.desc, v) },
