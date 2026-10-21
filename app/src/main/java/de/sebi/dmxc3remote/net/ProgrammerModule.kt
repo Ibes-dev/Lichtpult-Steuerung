@@ -333,7 +333,15 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
             s.headers
         )
         _effectParams.update { it + (attachableId to r.parametersList.map { p -> DevParam(p, r.parameterValuesMap[p.name]) }) }
+        if (loggedEffects.add(attachableId)) {
+            Diag.note("Effektparameter: " + r.parametersList.joinToString("; ") { p ->
+                val v = r.parameterValuesMap[p.name]
+                "${p.name} [${p.parameterValueTypeAQ.substringBefore(',')}] ${v?.valueCase}=\"${v?.text().orEmpty()}\""
+            })
+        }
     }
+
+    private val loggedEffects = java.util.Collections.synchronizedSet(HashSet<String>())
 
     fun loadEffectParams(attachableId: String) = act("Effektparameter") { readEffectParams(attachableId) }
 

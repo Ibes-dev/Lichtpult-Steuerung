@@ -50,13 +50,18 @@ fun DevParam.isEditable(): Boolean {
  */
 fun DevParam.isNumeric(): Boolean {
     if (desc.enumValuesCount > 0) return false
+    if (value?.valueCase == ObjectData.ValueCase.BOOLVALUE) return false
     val aq = desc.parameterValueTypeAQ.substringBefore(',').substringAfterLast('.').lowercase()
-    if (aq.isNotBlank()) return aq in setOf("double", "single", "decimal", "int16", "int32", "int64", "uint16", "uint32", "uint64", "byte", "sbyte")
-    return when (value?.valueCase) {
-        ObjectData.ValueCase.DOUBLEVALUE, ObjectData.ValueCase.FLOATVALUE, ObjectData.ValueCase.INTVALUE,
-        ObjectData.ValueCase.LONGVALUE, ObjectData.ValueCase.UINTVALUE, ObjectData.ValueCase.ULONGVALUE -> true
-        else -> false
-    }
+    // .NET-Zahlentypen
+    if (aq in setOf("double", "single", "decimal", "int16", "int32", "int64", "uint16", "uint32", "uint64", "byte", "sbyte")) return true
+    // Einheiten-Typen von DMXControl (Phase in °, Frequenz in Hz, Prozent …) kommen als eigener Typ
+    if (listOf("angle", "degree", "frequency", "hertz", "percent", "time", "duration", "speed", "value", "factor").any { it in aq }) return true
+    // Sonst am Wert erkennen: Zahl (ggf. mit Einheit) oder gefächert "a > b"
+    val t = value?.text()?.trim().orEmpty()
+    if (Regex("""^-?\d+([.,]\d+)?\s*\S{0,3}$""").matches(t)) return true
+    if (Regex("""^-?\d+([.,]\d+)?\s*\S+\s*-?\d+([.,]\d+)?$""").matches(t)) return true
+    if (desc.hasLowerBound() && desc.lowerBound.asDouble() != null && desc.hasUpperBound() && desc.upperBound.asDouble() != null) return true
+    return false
 }
 
 /** Neuer Wert im selben Typ wie der bisherige. */
@@ -71,7 +76,10 @@ private fun sameType(old: ObjectData?, d: Double): ObjectData = ObjectData.newBu
         ObjectData.ValueCase.USHORTVALUE -> setUshortValue(Math.round(d).toInt())
         ObjectData.ValueCase.BYTEVALUE -> setByteValue(Math.round(d).toInt())
         ObjectData.ValueCase.SBYTEVALUE -> setSbyteValue(Math.round(d).toInt())
-        else -> setDoubleValue(d)
+        ObjectData.ValueCase.DOUBLEVALUE, null -> setDoubleValue(d)
+        // Einheiten-Typen (Phase, Frequenz …) liefert DMXControl als Text oder Sonderwert:
+        // als Text senden, so wie man ihn in der Device Control eintippt
+        else -> setStringValue(java.math.BigDecimal(d).setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString())
     }
 }.build()
 
