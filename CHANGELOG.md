@@ -1,6 +1,7 @@
 # Lichtpult Remote 1.1.0
 
 ## Neu
+- 3D-Bühne: Scheinwerfer an den Positionen einer wählbaren StageView, Höhe, Ausrichtung, Neigung, Montage und Abstrahlwinkel je Gerät einstellbar; Lichtkegel und Lichtflecken in Live-Farbe und -Helligkeit, Bewegung über Pan/Tilt, Zoom, Gobo-Andeutung, Strobe; drehen und zoomen per Geste
 - Programmer als Arbeitsbereich mit Kopfzeile (Herkunft, Live/Blind, Speichern, Rückgängig, Leeren) und vier Bereichen:
   - Werte: Eigenschaften der Gruppe, wichtige Funktionen zuerst; Fächern mit Verlauf (Operator), Start/Ende, Gruppenverhalten und Gruppengröße; Effekte mit einstellbaren Parametern
   - Inhalt: alles, was im Programmer steht, mit Farbfeld und Wert; antippen öffnet die Gruppe, einzeln entfernbar

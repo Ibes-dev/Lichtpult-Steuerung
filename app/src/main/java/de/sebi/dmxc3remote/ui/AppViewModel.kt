@@ -70,6 +70,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val retryNow = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
 
     val midi = MidiHub(app)
+    val stage3d = de.sebi.dmxc3remote.net.Stage3DStore(app)
     val mic = MicBeatDetector()
 
     private val _profiles = MutableStateFlow(prefs.profiles)

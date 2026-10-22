@@ -4,6 +4,7 @@ import LumosProtobuf.CommonTypes.ObjectData
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -87,49 +88,93 @@ private fun sameType(old: ObjectData?, d: Double): ObjectData = ObjectData.newBu
  * Editor für einen generischen Parameter (Effekte, Geräte):
  * Auswahlliste -> Chips, Ja/Nein -> Schalter, Zahl mit Grenzen -> Regler, sonst Eingabefeld.
  */
+/** Operatoren für Fächer: der lineare Verlauf ">" zuerst. */
+fun sortedOperators(ops: List<String>): List<String> =
+    (listOf(">") + ops).distinct().sortedBy { if (it == ">") 0 else 1 }
+
+/**
+ * Editor für einen generischen Parameter.
+ * Zahlenparameter (auch mit Einheit wie Phase in ° oder Frequenz in Hz) bekommen Regler bzw. Eingabe
+ * und – wenn [onFan] gesetzt ist – einen Fächer-Modus "Start Operator Ende".
+ */
 @Composable
 fun ParamEditor(
     p: DevParam,
     onSet: (ObjectData) -> Unit,
     operators: List<String> = emptyList(),
-    onFan: ((from: Double, to: Double, op: String) -> Unit)? = null
+    onFan: ((from: Double, to: Double, op: String) -> Unit)? = null,
+    onNumber: ((Double) -> Unit)? = null
 ) {
     val v = p.value
     val label = p.label + (p.desc.unit.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "")
-    val numeric = p.isNumeric()
-    // Gefächerter Wert kommt als Text "a > b" zurück – nur bei Zahlenparametern auswerten
-    val fannedText = if (!numeric) null else v?.text()?.takeIf { t -> Regex("""-?\d+([.,]\d+)?\s*\S+\s*-?\d""").containsMatchIn(t) && !t.trim().matches(Regex("""-?\d+([.,]\d+)?""")) }
-    var fanMode by remember(p.desc.name) { mutableStateOf(fannedText != null) }
-    if (onFan != null && numeric) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-            FilterChip(selected = fanMode, onClick = { fanMode = !fanMode }, label = { Text("Fächern") })
+    val fan = v?.let { de.sebi.dmxc3remote.net.decodeFan(it) }
+    val numeric = fan != null || p.isNumeric()
+    if (numeric && onNumber != null) {
+        var fanOn by remember(p.desc.name, fan != null) { mutableStateOf(fan != null) }
+        Column(Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(label, style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        v?.let { de.sebi.dmxc3remote.net.paramText(it) }?.ifBlank { "–" } ?: "–",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (fan != null) Desk.Amber else Desk.TextDim
+                    )
+                }
+                if (onFan != null) FilterChip(
+                    selected = fanOn,
+                    onClick = {
+                        // Fächer ausschalten = wieder ein Einzelwert (Startwert des Fächers)
+                        if (fanOn && fan != null) onNumber(fan.from ?: 0.0)
+                        fanOn = !fanOn
+                    },
+                    label = { Text("Fächern") }
+                )
+            }
+            if (fanOn && onFan != null) FanParamRow(p, fan, operators, onFan)
+            else NumberRow(p, onNumber)
         }
-        if (fanMode) {
-            FanParamRow(p, fannedText, operators, onFan)
-            return
-        }
-        ParamEditorBody(p, label = "", onSet = onSet)
         return
     }
     ParamEditorBody(p, label, onSet)
 }
 
-/** Start/Ende/Verlauf für einen Effektparameter. */
+/** Einzelwert: Regler, wenn DMXControl Grenzen nennt, sonst Eingabefeld. */
 @Composable
-private fun FanParamRow(p: DevParam, current: String?, operators: List<String>, onFan: (Double, Double, String) -> Unit) {
-    val parts = current?.split(Regex("\\s*[^0-9.,\\-\\s]+\\s*"))?.filter { it.isNotBlank() }
-    var from by remember(p.desc.name) { mutableStateOf(parts?.getOrNull(0) ?: p.value?.text() ?: "0") }
-    var to by remember(p.desc.name) { mutableStateOf(parts?.getOrNull(1) ?: "0") }
-    val ops = operators.ifEmpty { listOf(">") }
-    var op by remember(p.desc.name, ops) { mutableStateOf(ops.firstOrNull { current?.contains(it) == true } ?: ops.first()) }
-    Column {
-        if (current != null) Text("Aktuell: $current", style = MaterialTheme.typography.labelSmall, color = Desk.Amber)
+private fun NumberRow(p: DevParam, onNumber: (Double) -> Unit) {
+    val cur = p.value?.let { de.sebi.dmxc3remote.net.paramNumber(it) } ?: 0.0
+    val lo = if (p.desc.hasLowerBound()) p.desc.lowerBound.asDouble() else null
+    val hi = if (p.desc.hasUpperBound()) p.desc.upperBound.asDouble() else null
+    if (lo != null && hi != null && hi > lo) {
+        var local by remember(p.desc.name) { mutableFloatStateOf(cur.toFloat()) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Slider(local.coerceIn(lo.toFloat(), hi.toFloat()), { local = it; onNumber(it.toDouble()) },
+                Modifier.weight(1f), valueRange = lo.toFloat()..hi.toFloat())
+            Text("%.2f".format(local), style = MaterialTheme.typography.labelMedium.merge(Numeric), modifier = Modifier.width(52.dp))
+        }
+    } else {
+        var t by remember(p.desc.name, cur) { mutableStateOf(java.math.BigDecimal(cur).setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()) }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            OutlinedTextField(from, { from = it }, label = { Text("Start") }, singleLine = true, modifier = Modifier.weight(1f),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-            OutlinedTextField(to, { to = it }, label = { Text("Ende") }, singleLine = true, modifier = Modifier.weight(1f),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+            CompactSearch(t, { t = it }, "Wert", Modifier.weight(1f))
+            TextButton(onClick = { t.replace(',', '.').toDoubleOrNull()?.let(onNumber) }) { Text("Setzen") }
+        }
+    }
+}
+
+/** Start / Ende / Verlauf für einen Effektparameter. */
+@Composable
+private fun FanParamRow(p: DevParam, current: de.sebi.dmxc3remote.net.FanInfo?, operators: List<String>, onFan: (Double, Double, String) -> Unit) {
+    val single = p.value?.let { de.sebi.dmxc3remote.net.paramNumber(it) }
+    fun fmt(d: Double?) = d?.let { java.math.BigDecimal(it).setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString() } ?: "0"
+    var from by remember(p.desc.name, current) { mutableStateOf(fmt(current?.from ?: single)) }
+    var to by remember(p.desc.name, current) { mutableStateOf(fmt(current?.to ?: single)) }
+    val ops = sortedOperators(operators)
+    var op by remember(p.desc.name, current) { mutableStateOf(current?.op?.takeIf { it in ops } ?: ops.first()) }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            CompactSearch(from, { from = it }, "Start", Modifier.weight(1f))
+            Text(op, style = MaterialTheme.typography.titleMedium, color = Desk.Amber)
+            CompactSearch(to, { to = it }, "Ende", Modifier.weight(1f))
             TextButton(onClick = {
                 val a = from.replace(',', '.').toDoubleOrNull(); val b = to.replace(',', '.').toDoubleOrNull()
                 if (a != null && b != null) onFan(a, b, op)

@@ -345,46 +345,163 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
 
     fun loadEffectParams(attachableId: String) = act("Effektparameter") { readEffectParams(attachableId) }
 
+    // ================================================================ Effektparameter schreiben
     /**
-     * Effektparameter fächern, z. B. Phase von 180° bis 0° über die Geräte.
-     * DMXControl zeigt gefächerte Parameter als Text "Start > Ende" (Device Control → Effects).
-     * Die App sendet genau diese Schreibweise als Text und prüft per Rücklesen, ob DMXControl sie
-     * übernommen hat. UNVERIFIZIERT: ob die Parameter-Schnittstelle Text für Zahlenparameter annimmt.
+     * Wie ein Zahlenwert bzw. ein Fächer für einen Parametertyp gesendet werden muss, wird einmal
+     * je Typ (parameterValueType_AQ) ermittelt: senden, zurücklesen, prüfen. Danach direkt.
+     *  Zahl:   0 = doubleValue, 1 = Text ("90")
+     *  Fächer: 0 = FannedPropertyValue (operator + parameterValues) im fallbackProtobuf,
+     *          1 = Text ("180 > 0", Schreibweise der Device Control)
      */
-    fun setEffectParamFanned(attachableId: String, desc: GenericParameterData, from: Double, to: Double, op: String) = act("Effekt fächern") {
-        fun fmt(d: Double) = java.math.BigDecimal(d).setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
-        val o = op.trim().ifBlank { ">" }
-        val text = "${fmt(from)} $o ${fmt(to)}"
-        val before = _effectParams.value[attachableId]?.associate { it.desc.name to it.value?.text().orEmpty() } ?: emptyMap()
+    private val numberMode = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private val fanMode = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    private fun typeKey(desc: GenericParameterData) = desc.parameterValueTypeAQ.substringBefore(',').ifBlank { desc.name }
+
+    private fun numText(d: Double) =
+        java.math.BigDecimal(d).setScale(4, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
+
+    private fun numberValue(mode: Int, d: Double) = LumosProtobuf.CommonTypes.ObjectData.newBuilder().apply {
+        if (mode == 0) setDoubleValue(d) else setStringValue(numText(d))
+    }.build()
+
+    private fun fanValue(mode: Int, desc: GenericParameterData, op: String, from: Double, to: Double): LumosProtobuf.CommonTypes.ObjectData =
+        if (mode == 0) {
+            val fpv = FannedPropertyValue.newBuilder().setOperator(op).setUiValueType(desc.valueType)
+                .addParameterValues(numText(from)).addParameterValues(numText(to)).build()
+            LumosProtobuf.CommonTypes.ObjectData.newBuilder()
+                .setFallbackProtobuf(fpv.toByteString())
+                .setProtobufTypeAQ("LumosProtobuf.FannedPropertyValue")
+                .build()
+        } else LumosProtobuf.CommonTypes.ObjectData.newBuilder().setStringValue("${numText(from)} $op ${numText(to)}").build()
+
+    private suspend fun sendParam(attachableId: String, desc: GenericParameterData, v: LumosProtobuf.CommonTypes.ObjectData) {
         parStub.dl(5).setParameterValue(
             SetTestParameterValueRequest.newBuilder().setId(attachableId).setParameter(desc)
-                .setUserContextId(s.userContextId)
-                .setValue(LumosProtobuf.CommonTypes.ObjectData.newBuilder().setStringValue(text)).build(),
+                .setUserContextId(s.userContextId).setValue(v).build(),
             s.headers
         ).requireOk(desc.displayName.ifBlank { desc.name })
-        readEffectParams(attachableId)
-        val back = _effectParams.value[attachableId]?.firstOrNull { it.desc.name == desc.name }?.value
-        val backText = back?.text().orEmpty()
-        Diag.note("Effekt fächern ${desc.name}: gesendet \"$text\", zurückgelesen \"$backText\" (${back?.valueCase})")
-        // Kontrolle: hat sich ein anderer Parameter geändert als der gewünschte?
-        _effectParams.value[attachableId]?.forEach { prm ->
-            val now = prm.value?.text().orEmpty()
-            if (prm.desc.name != desc.name && before[prm.desc.name] != null && before[prm.desc.name] != now)
-                Diag.note("Effekt fächern: unerwartet geändert ${prm.desc.name}: \"${before[prm.desc.name]}\" -> \"$now\"")
-        }
-        if (o in backText) s.emit("${desc.displayName.ifBlank { desc.name }}: $backText")
-        else s.emit("DMXControl hat den Fächer nicht übernommen (gelesen: ${backText.ifBlank { "leer" }})", isError = true)
     }
+
+    private fun currentOf(attachableId: String, desc: GenericParameterData) =
+        _effectParams.value[attachableId]?.firstOrNull { it.desc.name == desc.name }?.value
+
+    /** Zahlenwert setzen (Regler/Eingabe). Beim ersten Mal je Typ mit Rücklesen und Prüfung. */
+    fun setEffectNumber(attachableId: String, desc: GenericParameterData, d: Double) =
+        s.throttler.submit("eff:$attachableId:${desc.name}") {
+            val key = typeKey(desc)
+            val known = numberMode[key]
+            if (known != null) {
+                runCatching { sendParam(attachableId, desc, numberValue(known, d)) }
+                    .onFailure { s.emit(it.message ?: "Fehler", isError = true) }
+                return@submit
+            }
+            for (mode in listOf(0, 1)) {
+                val ok = runCatching { sendParam(attachableId, desc, numberValue(mode, d)) }.isSuccess
+                if (!ok) continue
+                runCatching { readEffectParams(attachableId) }
+                val back = currentOf(attachableId, desc)
+                val n = back?.let { paramNumber(it) }
+                if (n != null && kotlin.math.abs(n - d) < 1e-3 * maxOf(1.0, kotlin.math.abs(d))) {
+                    numberMode[key] = mode
+                    return@submit
+                }
+            }
+            Diag.note("Effektparameter ${desc.name}: Wert $d nicht übernommen, gelesen \"${currentOf(attachableId, desc)?.let { paramText(it) }}\"")
+            s.emit("${desc.displayName.ifBlank { desc.name }}: DMXControl hat den Wert nicht übernommen", isError = true)
+        }
+
+    /**
+     * Effektparameter fächern, z. B. Phase von 180° bis 0° über die Geräte.
+     * DMXControl prüft den Fächer vorab (IsValidParameteredFannedValue) und zeigt ihn in der
+     * Device Control als "Start Operator Ende". Gesendet wird zuerst als FannedPropertyValue,
+     * sonst als Text; Erfolg wird per Rücklesen geprüft und je Typ gemerkt.
+     */
+    fun setEffectParamFanned(attachableId: String, desc: GenericParameterData, from: Double, to: Double, op: String) = act("Effekt fächern") {
+        val o = op.trim().ifBlank { ">" }
+        // 1) Vorab-Prüfung durch DMXControl
+        val check = runCatching {
+            fanStub.dl(5).isValidParameteredFannedValue(
+                LumosProtobuf.Cue.FannedValueServiceTypes.ValidParameteredFannedValueRequest.newBuilder()
+                    .setRequestId(s.nextRequestId())
+                    .setFpv(FannedPropertyValue.newBuilder().setOperator(o).setUiValueType(desc.valueType)
+                        .addParameterValues(numText(from)).addParameterValues(numText(to)))
+                    .setUiValueType(desc.valueType)
+                    .build(),
+                s.headers
+            )
+        }.getOrNull()
+        if (check != null && !check.ok) {
+            Diag.note("Effekt fächern ${desc.name}: DMXControl lehnt \"${numText(from)} $o ${numText(to)}\" ab: ${check.message.text()}")
+            throw UmbraException("Fächer ungültig: ${check.message.text().ifBlank { "von DMXControl abgelehnt" }}")
+        }
+        // 2) Senden und prüfen
+        val key = typeKey(desc)
+        val modes = fanMode[key]?.let { listOf(it) } ?: listOf(0, 1)
+        for (mode in modes) {
+            val ok = runCatching { sendParam(attachableId, desc, fanValue(mode, desc, o, from, to)) }
+                .onFailure { Diag.note("Effekt fächern ${desc.name} Variante $mode: ${it.message}") }.isSuccess
+            if (!ok) continue
+            readEffectParams(attachableId)
+            val back = currentOf(attachableId, desc)
+            val fan = back?.let { decodeFan(it) }
+            Diag.note("Effekt fächern ${desc.name} Variante $mode: gelesen \"${back?.let { paramText(it) }}\"")
+            if (fan != null) {
+                fanMode[key] = mode
+                s.emit("${desc.displayName.ifBlank { desc.name }}: ${fan.text}")
+                return@act
+            }
+        }
+        throw UmbraException("DMXControl hat den Fächer nicht übernommen")
+    }
+
+    /** Fächer zurücknehmen: wieder ein einzelner Wert. */
+    fun clearEffectFan(attachableId: String, desc: GenericParameterData, value: Double) = setEffectNumber(attachableId, desc, value)
 
     fun setEffectParam(attachableId: String, desc: GenericParameterData, value: LumosProtobuf.CommonTypes.ObjectData) =
         s.throttler.submit("eff:$attachableId:${desc.name}") {
-            parStub.dl(5).setParameterValue(
-                SetTestParameterValueRequest.newBuilder().setId(attachableId).setParameter(desc)
-                    .setUserContextId(s.userContextId).setValue(value).build(),
-                s.headers
-            ).requireOk(desc.displayName.ifBlank { desc.name })
+            sendParam(attachableId, desc, value)
             _effectParams.update { m ->
                 m + (attachableId to (m[attachableId] ?: emptyList()).map { if (it.desc.name == desc.name) it.copy(value = value) else it })
             }
         }
 }
+
+/** Gefächerter Parameterwert: Operator und Stützwerte, z. B. ">" mit [180, 0]. */
+data class FanInfo(val op: String, val values: List<String>) {
+    val text get() = values.joinToString(" $op ")
+    val from get() = values.firstOrNull()?.replace(',', '.')?.toDoubleOrNull()
+    val to get() = values.getOrNull(1)?.replace(',', '.')?.toDoubleOrNull()
+}
+
+private val FAN_TEXT = Regex("""^\s*(-?\d+(?:[.,]\d+)?)\s*([^\d\s.,-][^\d\s]*)\s*(-?\d+(?:[.,]\d+)?)\s*$""")
+
+/** Fächer aus einem Parameterwert lesen (FannedPropertyValue im Protobuf-Anhang oder Text "a > b"). */
+fun decodeFan(v: LumosProtobuf.CommonTypes.ObjectData): FanInfo? {
+    if (v.fallbackCase == LumosProtobuf.CommonTypes.ObjectData.FallbackCase.FALLBACKPROTOBUF &&
+        (v.protobufTypeAQ + " " + v.fallbackTypeAQ).contains("Fanned", true)
+    ) {
+        val f = runCatching { FannedPropertyValue.parseFrom(v.fallbackProtobuf) }.getOrNull()
+        if (f != null) {
+            val vals = f.parameterValuesList.ifEmpty { f.fannedValuesList.map { if (it.valueCase == LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.DOUBLEVALUE) it.doubleValue.toString() else it.valueCase.name } }
+            if (vals.isNotEmpty()) return FanInfo(f.operator.ifBlank { ">" }, vals)
+        }
+    }
+    if (v.valueCase == LumosProtobuf.CommonTypes.ObjectData.ValueCase.STRINGVALUE) {
+        FAN_TEXT.matchEntire(v.stringValue)?.let { m -> return FanInfo(m.groupValues[2], listOf(m.groupValues[1], m.groupValues[3])) }
+    }
+    return null
+}
+
+/** Zahl aus einem Parameterwert (primitive Zahl oder Text wie "90" / "0.5 Hz"). */
+fun paramNumber(v: LumosProtobuf.CommonTypes.ObjectData): Double? =
+    v.asDouble() ?: if (v.valueCase == LumosProtobuf.CommonTypes.ObjectData.ValueCase.STRINGVALUE)
+        Regex("""^\s*(-?\d+(?:[.,]\d+)?)""").find(v.stringValue)?.groupValues?.get(1)?.replace(',', '.')?.toDoubleOrNull()
+    else null
+
+/** Lesbarer Parameterwert: Fächer, Zahl oder Text. */
+fun paramText(v: LumosProtobuf.CommonTypes.ObjectData): String =
+    decodeFan(v)?.text ?: paramNumber(v)?.let {
+        java.math.BigDecimal(it).setScale(4, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
+    } ?: v.text()
+

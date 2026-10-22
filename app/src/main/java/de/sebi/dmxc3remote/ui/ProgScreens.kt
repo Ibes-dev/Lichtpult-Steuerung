@@ -608,7 +608,8 @@ private fun EnumChips(labels: List<String>, selected: Int, colors: List<Color?> 
 private fun FanControl(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePropertyDescriptor) {
     val range = p.doubleRange()
     val operators by s.programmer.operators.collectAsStateWithLifecycle()
-    var op by remember(g.id, p.id, operators) { mutableStateOf(operators.firstOrNull() ?: "") }
+    val ops = sortedOperators(operators)
+    var op by remember(g.id, p.id, operators) { mutableStateOf(ops.first()) }
     var from by remember(g.id, p.id) { mutableStateOf(range.start.toFloat()) }
     var to by remember(g.id, p.id) { mutableStateOf(range.endInclusive.toFloat()) }
     var mode by remember(g.id, p.id) { mutableStateOf(de.sebi.dmxc3remote.net.GroupMode.CONCAT) }
@@ -618,10 +619,10 @@ private fun FanControl(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePrope
         Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Desk.Surface).padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        if (operators.isNotEmpty()) {
+        if (ops.size > 1) {
             Text("Verlauf", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(operators) { o -> FilterChip(selected = op == o, onClick = { op = o; send() }, label = { Text(o) }) }
+                items(ops) { o -> FilterChip(selected = op == o, onClick = { op = o; send() }, label = { Text(o) }) }
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -673,14 +674,16 @@ private fun EffectsPanel(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePro
             when {
                 list == null -> Text("Parameter werden geladen …", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
                 list.isEmpty() -> Text("Dieser Effekt hat keine einstellbaren Parameter.", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
-                else -> list.filter { it.isEditable() || it.isNumeric() }.sortedBy { it.desc.saveOrder }.forEach { prm ->
-                    ParamEditor(
-                        prm,
-                        onSet = { v -> s.programmer.setEffectParam(id, prm.desc, v) },
-                        operators = operators,
-                        onFan = { a, b, op -> s.programmer.setEffectParamFanned(id, prm.desc, a, b, op) }
-                    )
-                }
+                else -> list.filter { it.isEditable() || it.isNumeric() || (it.value?.let { v -> de.sebi.dmxc3remote.net.decodeFan(v) } != null) }
+                    .sortedBy { it.desc.saveOrder }.forEach { prm ->
+                        ParamEditor(
+                            prm,
+                            onSet = { v -> s.programmer.setEffectParam(id, prm.desc, v) },
+                            operators = operators,
+                            onFan = { a, b, op -> s.programmer.setEffectParamFanned(id, prm.desc, a, b, op) },
+                            onNumber = { d -> s.programmer.setEffectNumber(id, prm.desc, d) }
+                        )
+                    }
             }
             HorizontalDivider(color = Desk.Line)
         }
