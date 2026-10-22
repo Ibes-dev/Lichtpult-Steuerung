@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
@@ -175,6 +176,7 @@ fun Stage3DScreen(s: UmbraSession, store: Stage3DStore) {
             val fixRef by rememberUpdatedState(fixtures)
             Canvas(
                 Modifier.fillMaxSize()
+                    .graphicsLayer()
                     .pointerInput(Unit) {
                         detectTransformGestures { _, pan, zoom, _ ->
                             yawS.floatValue = (yawS.floatValue - pan.x * 0.3f) % 360f
@@ -215,11 +217,13 @@ private fun DrawScope.drawStage(
     // Boden mit Meterraster
     val floor = listOf(V3(minX, minY, 0f), V3(maxX, minY, 0f), V3(maxX, maxY, 0f), V3(minX, maxY, 0f)).mapNotNull { cam.project(it) }
     if (floor.size == 4) drawPath(Path().apply { moveTo(floor[0].x, floor[0].y); floor.drop(1).forEach { lineTo(it.x, it.y) }; close() }, Color(0xFF14161A))
-    val grid = Color(0xFF262A31)
+    val gridPath = Path()
+    fun seg(a: V3, b: V3) { val p = cam.project(a) ?: return; val q = cam.project(b) ?: return; gridPath.moveTo(p.x, p.y); gridPath.lineTo(q.x, q.y) }
     var gx = kotlin.math.floor(minX)
-    while (gx <= maxX) { line3(cam, V3(gx, minY, 0f), V3(gx, maxY, 0f), grid); gx += 1f }
+    while (gx <= maxX) { seg(V3(gx, minY, 0f), V3(gx, maxY, 0f)); gx += 1f }
     var gy = kotlin.math.floor(minY)
-    while (gy <= maxY) { line3(cam, V3(minX, gy, 0f), V3(maxX, gy, 0f), grid); gy += 1f }
+    while (gy <= maxY) { seg(V3(minX, gy, 0f), V3(maxX, gy, 0f)); gy += 1f }
+    drawPath(gridPath, Color(0xFF262A31), style = Stroke(1f))
     // Bühnenvorderkante
     line3(cam, V3(minX, maxY - 2f, 0f), V3(maxX, maxY - 2f, 0f), Color(0xFF3A3F48), 2f)
 
@@ -295,11 +299,16 @@ private fun DrawScope.line3(cam: Camera, a: V3, b: V3, color: Color, width: Floa
     drawLine(color, p, q, width)
 }
 
-/** Kreis um [center] senkrecht zu [axis]. */
+private val trig = HashMap<Int, Pair<FloatArray, FloatArray>>()
+
+/** Kreis um [center] senkrecht zu [axis] (Sinus/Kosinus je Punktzahl nur einmal berechnet). */
 private fun circle(center: V3, axis: V3, r: Float, n: Int): List<V3> {
+    val (cs, sn) = trig.getOrPut(n) {
+        FloatArray(n) { cos(2 * PI.toFloat() * it / n) } to FloatArray(n) { sin(2 * PI.toFloat() * it / n) }
+    }
     val helper = if (abs(axis.z) < 0.9f) V3(0f, 0f, 1f) else V3(1f, 0f, 0f)
     val u = (axis cross helper).norm(); val v = (axis cross u).norm()
-    return (0 until n).map { i -> val a = 2 * PI.toFloat() * i / n; center + u * (r * cos(a)) + v * (r * sin(a)) }
+    return List(n) { i -> center + u * (r * cs[i]) + v * (r * sn[i]) }
 }
 
 private fun polyPath(pts: List<Offset>) = Path().apply {

@@ -71,6 +71,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     val midi = MidiHub(app)
     val stage3d = de.sebi.dmxc3remote.net.Stage3DStore(app)
+
+    init { de.sebi.dmxc3remote.net.EffectMemory.init(app) }
     val mic = MicBeatDetector()
 
     private val _profiles = MutableStateFlow(prefs.profiles)

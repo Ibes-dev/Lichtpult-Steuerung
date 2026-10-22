@@ -128,7 +128,7 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
             while (true) {
                 delay(300)
                 val d = dirty.value
-                if (d != seen) { seen = d; runCatching { refresh() } }
+                if (d != seen) { seen = d; runCatching { refresh() }; runCatching { s.devices.syncEffects() } }
             }
         }
         // Sicherheitsnetz: alle 3 s nachlesen, falls eine Änderung keine Meldung erzeugt
@@ -460,24 +460,37 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
         // 2) Senden: im Format der Vorlage, sonst als neues FannedPropertyValue, sonst als Text.
         //    Danach zurücklesen: Erfolg erst, wenn DMXControl den Fächer auch führt.
         val template = currentOf(attachableId, desc)
+        val vals = listOf(numText(from), numText(to))
         val candidates = buildList {
-            mirrored(template, o, listOf(numText(from), numText(to)))?.let { add("Vorlage" to it) }
+            // Vorlage von DMXControl mit Stützwerten als Text, als Zahl (fannedValues) und beidem
+            fpvOf(template ?: LumosProtobuf.CommonTypes.ObjectData.getDefaultInstance())?.let { f ->
+                fun wrap(nf: FannedPropertyValue) = template!!.toBuilder().setFallbackProtobuf(nf.toByteString()).build()
+                val dpvs = listOf(from, to).map { LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.newBuilder().setDoubleValue(it).build() }
+                add("Vorlage Zahlen" to wrap(f.toBuilder().setOperator(o).clearParameterValues().clearFannedValues().addAllFannedValues(dpvs).build()))
+                add("Vorlage beides" to wrap(f.toBuilder().setOperator(o).clearParameterValues().addAllParameterValues(vals).clearFannedValues().addAllFannedValues(dpvs).build()))
+                add("Vorlage Text" to wrap(f.toBuilder().setOperator(o).clearParameterValues().addAllParameterValues(vals).clearFannedValues().build()))
+            }
             add("FannedPropertyValue" to fanValue(0, desc, o, from, to))
             add("Text" to fanValue(1, desc, o, from, to))
         }
-        for ((name, v) in candidates) {
+        fun matches(f: FanInfo?) = f != null && f.from != null && f.to != null &&
+            kotlin.math.abs(f.from!! - from) < 0.01 && kotlin.math.abs(f.to!! - to) < 0.01
+        // bekannte funktionierende Kodierung zuerst
+        val ordered = fanMode[typeKey(desc)]?.let { k -> candidates.sortedBy { if (it.first.hashCode() == k) 0 else 1 } } ?: candidates
+        for ((name, v) in ordered) {
             val r = runCatching { sendParam(attachableId, desc, v) }
             if (r.isFailure) { Diag.note("Effekt fächern ${desc.name} ($name) abgelehnt: ${r.exceptionOrNull()?.message}"); continue }
             runCatching { readEffectParams(attachableId) }
             val back = currentOf(attachableId, desc)
             val fan = back?.let { decodeFan(it) }
-            Diag.note("Effekt fächern ${desc.name} ($name): gelesen \"${back?.let { paramText(it) }}\" [${back?.protobufTypeAQ}]")
-            if (fan != null) {
-                s.emit("${desc.displayName.ifBlank { desc.name }}: ${fan.text}")
+            Diag.note("Effekt fächern ${desc.name} ($name): gesendet ${vals.joinToString(" $o ")}, gelesen \"${back?.let { paramText(it) }}\"")
+            if (matches(fan)) {
+                fanMode[typeKey(desc)] = name.hashCode()
+                s.emit("${desc.displayName.ifBlank { desc.name }}: ${fan!!.text}")
                 return@act
             }
         }
-        throw UmbraException("DMXControl hat den Fächer angenommen, führt ihn aber nicht (siehe Diagnose)")
+        throw UmbraException("DMXControl hat den Fächer nicht mit diesen Werten übernommen (Details unter Diagnose)")
     }
 
     /** Fächer zurücknehmen: wieder ein einzelner Wert. */
@@ -511,10 +524,10 @@ fun fpvOf(v: LumosProtobuf.CommonTypes.ObjectData): FannedPropertyValue? {
     return f.takeIf { it.parameterValuesCount > 0 || it.fannedValuesCount > 0 || it.operator.isNotBlank() }
 }
 
+/** Stützwerte: Zahlen aus fannedValues haben Vorrang, sonst die Texte aus parameterValues. */
 private fun FannedPropertyValue.values(): List<String> =
-    parameterValuesList.filter { it.isNotBlank() }.ifEmpty {
-        fannedValuesList.mapNotNull { if (it.valueCase == LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.DOUBLEVALUE) it.doubleValue.toString() else null }
-    }
+    fannedValuesList.mapNotNull { if (it.valueCase == LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.DOUBLEVALUE) it.doubleValue.toString() else null }
+        .ifEmpty { parameterValuesList.filter { it.isNotBlank() } }
 
 private val FAN_TEXT = Regex("""^\s*(-?\d+(?:[.,]\d+)?)\s*([^\d\s.,-][^\d\s]*)\s*(-?\d+(?:[.,]\d+)?)\s*$""")
 

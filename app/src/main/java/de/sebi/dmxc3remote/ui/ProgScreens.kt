@@ -247,7 +247,10 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
     val fanned = fannedMap[key]
     val reallyFanned = fanned != null && fanned.fannedValuesList.map { it.toByteString() }.distinct().size > 1
     val effects = appliedMap[key] ?: emptyList()
-    val inProg = server != null || reallyFanned || effects.isNotEmpty()
+    val fxState by dm.effectState.collectAsStateWithLifecycle()
+    // DMXControl meldet einen Effekt auf dieser Eigenschaft, der nicht in der App angelegt wurde
+    val foreignFx = effects.isEmpty() && (key in fxState || "${g.id}:${p.name}" in fxState)
+    val inProg = server != null || reallyFanned || effects.isNotEmpty() || foreignFx
 
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Desk.Panel)) {
         Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -257,6 +260,7 @@ private fun PropertyControl(s: UmbraSession, g: DeviceGroupDescriptor, p: Device
                 val tags = buildList {
                     if (reallyFanned) add("gefächert")
                     if (effects.isNotEmpty()) add("${effects.size} Effekt" + if (effects.size > 1) "e" else "")
+                    if (foreignFx) add("Effekt aktiv")
                 }
                 if (tags.isNotEmpty()) Text(
                     tags.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = Desk.Amber, maxLines = 1,

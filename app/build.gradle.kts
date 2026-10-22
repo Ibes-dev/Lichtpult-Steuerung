@@ -49,6 +49,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Test-APK ohne Debugger-Modus: Jetpack Compose läuft in "debuggable"-Builds deutlich
+            // langsamer (u. a. die 3D-Bühne). Fehler meldet weiterhin der eingebaute Absturzbericht.
+            isDebuggable = false
+        }
         release {
             isMinifyEnabled = false
             if (keystoreFile != null) signingConfig = signingConfigs.getByName("release")
