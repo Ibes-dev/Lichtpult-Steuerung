@@ -109,15 +109,19 @@ fun paramSpec(p: DevParam): ParamSpec {
     val hi = if (p.desc.hasUpperBound()) p.desc.upperBound.asDouble()?.toFloat() else null
     val byName = when {
         "phase" in n -> ParamSpec(0f, 360f, 0f, fmt = "%.0f°")
-        "freq" in n -> ParamSpec(0f, 5f, 0.1f, fmt = "%.2f Hz")
+        "freq" in n -> ParamSpec(0f, 5f, 1f, fmt = "%.2f Hz")
         "amplitude" in n -> ParamSpec(0f, 100f, 100f)
+        "time" in n || "zeit" in n -> ParamSpec(0f, 5f, 0.1f, fmt = "%.2f")
         "offset" in n -> ParamSpec(-100f, 100f, 0f)
         "rotation" in n || "angle" in n || "winkel" in n -> ParamSpec(0f, 360f, 0f, fmt = "%.0f°")
         "size" in n || "radius" in n || "width" in n || "height" in n || "größe" in n -> ParamSpec(0f, 100f, 50f)
         "count" in n || "anzahl" in n || "corner" in n || "ecken" in n -> ParamSpec(1f, 12f, 5f)
-        else -> ParamSpec(0f, 100f, 0f, fmt = "%.1f")
+        else -> null
     }
-    return if (lo != null && hi != null && hi > lo) byName.copy(min = lo, max = hi, def = byName.def.coerceIn(lo, hi)) else byName
+    // Bekannte Parameter: Bereich wie in der Device Control (DMXControl erlaubt z. B. Phase bis 3600°,
+    // das macht den Regler unbrauchbar grob). Unbekannte: Grenzen von DMXControl, sonst 0–100.
+    return byName ?: if (lo != null && hi != null && hi > lo) ParamSpec(lo, hi, lo.coerceAtLeast(0f).coerceAtMost(hi), fmt = "%.2f")
+    else ParamSpec(0f, 100f, 0f, fmt = "%.1f")
 }
 
 /**
