@@ -62,6 +62,10 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.math.tan
 
+private val floatSaver = androidx.compose.runtime.saveable.Saver<androidx.compose.runtime.MutableFloatState, Float>(
+    save = { it.floatValue }, restore = { mutableFloatStateOf(it) }
+)
+
 // ================================================================== kleine 3D-Mathematik
 private data class V3(val x: Float, val y: Float, val z: Float) {
     operator fun plus(o: V3) = V3(x + o.x, y + o.y, z + o.z)
@@ -105,15 +109,19 @@ private data class Fixture(val id: String, val label: String, val pos: V3, val r
 fun Stage3DScreen(s: UmbraSession, store: Stage3DStore) {
     val views by s.stage.views.collectAsStateWithLifecycle()
     val devices by s.stage.devices.collectAsStateWithLifecycle()
-    val live by s.stage.live.collectAsStateWithLifecycle()
     val rigs by store.rigs.collectAsStateWithLifecycle()
     val cfg by store.view.collectAsStateWithLifecycle()
     var setup by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf<String?>(null) }
-    var yaw by rememberSaveable { mutableFloatStateOf(20f) }
-    var pitch by rememberSaveable { mutableFloatStateOf(25f) }
-    var dist by rememberSaveable { mutableFloatStateOf(16f) }
+    // Kamera als State-Objekte: werden nur in der Zeichenphase gelesen -> Gesten lösen kein Neuaufbauen
+    // der Oberfläche aus, nur ein Neuzeichnen der Leinwand
+    val yawS = rememberSaveable(saver = floatSaver) { mutableFloatStateOf(20f) }
+    val pitchS = rememberSaveable(saver = floatSaver) { mutableFloatStateOf(25f) }
+    val distS = rememberSaveable(saver = floatSaver) { mutableFloatStateOf(16f) }
     var haze by rememberSaveable { mutableFloatStateOf(0.5f) }
+    // geglättete Pan/Tilt/Zoom-Werte je Gerät (Bewegung zwischen den Abfragen weich interpolieren)
+    val smooth = remember { HashMap<String, FloatArray>() }
+    val lastT = remember { LongArray(1) }
 
     val sortedViews = remember(views) { views.values.sortedBy { if (it.orderIndexSet) it.orderIndex else Int.MAX_VALUE } }
     val view = views[cfg.stageViewId] ?: sortedViews.firstOrNull()
@@ -142,12 +150,11 @@ fun Stage3DScreen(s: UmbraSession, store: Stage3DStore) {
         }
     }
 
-    // Uhr nur, wenn etwas blinkt (Strobe) – sonst wird nur bei neuen Werten neu gezeichnet
-    var clock by remember { mutableLongStateOf(0L) }
-    val anyStrobe = live.values.any { (it.strobe ?: 0f) > 0f }
-    LaunchedEffect(anyStrobe) {
-        if (!anyStrobe) return@LaunchedEffect
-        while (true) withFrameNanos { clock = it / 1_000_000 }
+    // Bildtakt: solange die Ansicht offen ist, jede Bildschirmaktualisierung (für Glättung und Strobe).
+    // Der Wert wird nur beim Zeichnen gelesen.
+    val frame = remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) {
+        while (true) withFrameNanos { frame.longValue = it / 1_000_000 }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -170,16 +177,17 @@ fun Stage3DScreen(s: UmbraSession, store: Stage3DStore) {
                 Modifier.fillMaxSize()
                     .pointerInput(Unit) {
                         detectTransformGestures { _, pan, zoom, _ ->
-                            yaw = (yaw - pan.x * 0.3f) % 360f
-                            pitch = (pitch + pan.y * 0.2f).coerceIn(5f, 85f)
-                            dist = (dist / zoom).coerceIn(4f, 60f)
+                            yawS.floatValue = (yawS.floatValue - pan.x * 0.3f) % 360f
+                            pitchS.floatValue = (pitchS.floatValue + pan.y * 0.2f).coerceIn(5f, 85f)
+                            distS.floatValue = (distS.floatValue / zoom).coerceIn(4f, 60f)
                         }
                     }
                     .pointerInput(Unit) {
-                        detectTapGestures(onDoubleTap = { yaw = 20f; pitch = 25f; dist = 16f })
+                        detectTapGestures(onDoubleTap = { yawS.floatValue = 20f; pitchS.floatValue = 25f; distS.floatValue = 16f })
                     }
             ) {
-                drawStage(fixRef, live, yaw, pitch, dist, haze, cfg, selected, clock)
+                val now = frame.longValue
+                drawStage(fixRef, s.stage.live.value, yawS.floatValue, pitchS.floatValue, distS.floatValue, haze, cfg, selected, now, smooth, lastT)
             }
             Text(
                 "Ziehen dreht, zwei Finger zoomen, Doppeltipp setzt zurück",
@@ -194,8 +202,12 @@ fun Stage3DScreen(s: UmbraSession, store: Stage3DStore) {
 // ================================================================== Zeichnen
 private fun DrawScope.drawStage(
     fixtures: List<Fixture>, live: Map<String, LiveOut>, yaw: Float, pitch: Float, dist: Float,
-    haze: Float, cfg: View3D, selected: String?, clock: Long
+    haze: Float, cfg: View3D, selected: String?, clock: Long, smooth: HashMap<String, FloatArray>, lastT: LongArray
 ) {
+    // Zeit seit dem letzten Bild für die Glättung (max. 100 ms, damit nach Pausen nichts springt)
+    val dt = (if (lastT[0] == 0L) 0L else (clock - lastT[0]).coerceIn(0, 100)) / 1000f
+    lastT[0] = clock
+    val kk = (dt * 12f).coerceIn(0f, 1f)
     val minX = fixtures.minOf { it.pos.x } - 2f; val maxX = fixtures.maxOf { it.pos.x } + 2f
     val minY = fixtures.minOf { it.pos.y } - 2f; val maxY = fixtures.maxOf { it.pos.y } + 4f
     val cam = Camera(V3(0f, (minY + maxY) / 2, 1.2f), yaw, pitch, dist, size.width, size.height)
@@ -220,12 +232,17 @@ private fun DrawScope.drawStage(
         o.strobe?.let { sp -> val hz = sp.coerceIn(1f, 12f); if ((clock * hz / 1000f).toInt() % 2 == 1) return@mapNotNull null }
         val base = if (o.hasColor) Color(o.r, o.g, o.b) else Color.White
         // Richtung: Ausrichtung + Pan um die Hochachse, Neigung aus der Senkrechten
-        val panDeg = f.rig.yaw + (o.pan?.toFloat() ?: 0f)
-        val tiltDeg = if (f.moving && o.tilt != null) o.tilt.toFloat() else f.rig.tilt
+        // weich nachführen: [pan, tilt, zoom]
+        val st = smooth.getOrPut(f.id) { floatArrayOf(o.pan?.toFloat() ?: 0f, o.tilt?.toFloat() ?: f.rig.tilt, o.zoom ?: 0.5f) }
+        st[0] += ((o.pan?.toFloat() ?: 0f) - st[0]) * kk
+        st[1] += ((o.tilt?.toFloat() ?: f.rig.tilt) - st[1]) * kk
+        st[2] += ((o.zoom ?: st[2]) - st[2]) * kk
+        val panDeg = f.rig.yaw + st[0]
+        val tiltDeg = if (f.moving && o.tilt != null) st[1] else f.rig.tilt
         val fwd = V3(sin(rad(panDeg)), cos(rad(panDeg)), 0f)
         val vert = V3(0f, 0f, if (f.rig.hanging) -1f else 1f)
         val dir = (vert * cos(rad(tiltDeg)) + fwd * sin(rad(tiltDeg))).norm()
-        val beamDeg = o.zoom?.let { 5f + it * 40f } ?: f.rig.beam
+        val beamDeg = if (o.zoom != null) 5f + st[2] * 40f else f.rig.beam
         val len = if (dir.z < -0.05f) (f.pos.z / -dir.z).coerceAtMost(30f) else 12f
         val end = f.pos + dir * len
         Beam(f, base, k, end, dir, len * tan(rad(beamDeg / 2)), o.gobo)
@@ -233,7 +250,7 @@ private fun DrawScope.drawStage(
 
     // Lichtflecken auf dem Boden (additiv)
     beams.filter { it.dir.z < -0.05f }.forEach { b ->
-        val ring = circle(b.end, b.dir, b.radius, 28).mapNotNull { cam.project(it) }
+        val ring = circle(b.end, b.dir, b.radius, 18).mapNotNull { cam.project(it) }
         if (ring.size < 8) return@forEach
         val c = cam.project(b.end) ?: return@forEach
         val r = ring.maxOf { (it - c).getDistance() }
@@ -250,7 +267,7 @@ private fun DrawScope.drawStage(
     // Lichtkegel im Dunst (additiv, zur Quelle hin heller)
     beams.forEach { b ->
         val src = cam.project(b.f.pos) ?: return@forEach
-        val ring = circle(b.end, b.dir, b.radius, 24).mapNotNull { cam.project(it) }
+        val ring = circle(b.end, b.dir, b.radius, 14).mapNotNull { cam.project(it) }
         if (ring.size < 6) return@forEach
         val hull = convexHull(ring + src)
         val endC = cam.project(b.end) ?: ring.reduce { acc, o -> acc + o } / ring.size.toFloat()

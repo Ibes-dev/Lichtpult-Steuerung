@@ -695,17 +695,16 @@ private fun EffectsPanel(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePro
 @Composable
 private fun EffectDialog(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePropertyDescriptor, onClose: (added: Boolean) -> Unit) {
     val all by s.devices.attachables.collectAsStateWithLifecycle()
+    // Nur Effekte 1D und 2D (wie im DMXControl-Fenster "Effects and Filters", Reiter "Effect");
+    // Filter, Matrix- und Radix-Effekte bleiben vorerst weg
     val groups = remember(all) {
-        all.groupBy { it.attachableGroup.ifBlank { it.type.ifBlank { "Weitere" } } }
-            .toList()
-            .sortedBy { (k, _) ->
-                when {
-                    k.contains("1D", true) -> 0
-                    k.contains("2D", true) -> 1
-                    k.contains("filter", true) -> 3
-                    else -> 2
-                }
-            }
+        val byGroup = all.groupBy { it.attachableGroup.ifBlank { it.type.ifBlank { "Weitere" } } }
+        val dims = byGroup.filterKeys { k -> k.contains("1D", true) || k.contains("2D", true) }
+        val chosen = if (dims.isNotEmpty()) dims else byGroup.filterKeys { k ->
+            listOf("filter", "matrix", "radix").none { k.contains(it, true) }
+        }.mapValues { (_, l) -> l.filter { a -> listOf("chaser", "pwm", "listswitch").none { (a.name + a.displayName).contains(it, true) } } }
+        chosen.toList().sortedBy { (k, _) -> if (k.contains("1D", true)) 0 else if (k.contains("2D", true)) 1 else 2 }
+            .map { (k, l) -> k to l.sortedBy { (it.displayName.ifBlank { it.name }).lowercase() } }
     }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = { onClose(false) },
@@ -715,7 +714,7 @@ private fun EffectDialog(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePro
                 Text("DMXControl hat keine Effekte gemeldet.", color = Desk.TextDim)
             } else {
                 androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-                    androidx.compose.foundation.lazy.grid.GridCells.Adaptive(84.dp),
+                    androidx.compose.foundation.lazy.grid.GridCells.Fixed(if (isWide()) 4 else 3),
                     Modifier.height(460.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)

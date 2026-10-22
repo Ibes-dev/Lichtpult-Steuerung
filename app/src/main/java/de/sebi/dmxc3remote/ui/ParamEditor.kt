@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -92,10 +94,37 @@ private fun sameType(old: ObjectData?, d: Double): ObjectData = ObjectData.newBu
 fun sortedOperators(ops: List<String>): List<String> =
     (listOf(">") + ops).distinct().sortedBy { if (it == ">") 0 else 1 }
 
+/** Bereich und Vorgabe eines Effektparameters (wie in der Device Control von DMXControl). */
+data class ParamSpec(val min: Float, val max: Float, val def: Float, val bool: Boolean = false, val fmt: String = "%.0f")
+
 /**
- * Editor für einen generischen Parameter.
- * Zahlenparameter (auch mit Einheit wie Phase in ° oder Frequenz in Hz) bekommen Regler bzw. Eingabe
- * und – wenn [onFan] gesetzt ist – einen Fächer-Modus "Start Operator Ende".
+ * Vorgaben nach Parametername, da DMXControl über die Schnittstelle keine Grenzen mitschickt:
+ * Amplitude 0–100 (100), Phase 0–360° (0), Frequenz 0–5 Hz (0,1), "+/-"-Schalter aus.
+ */
+fun paramSpec(p: DevParam): ParamSpec {
+    val n = (p.desc.name + " " + p.desc.displayName).lowercase()
+    val aq = p.desc.parameterValueTypeAQ.lowercase()
+    if ("boolean" in aq || n.trim().startsWith("+/-") || p.value?.valueCase == ObjectData.ValueCase.BOOLVALUE) return ParamSpec(0f, 1f, 0f, bool = true)
+    val lo = if (p.desc.hasLowerBound()) p.desc.lowerBound.asDouble()?.toFloat() else null
+    val hi = if (p.desc.hasUpperBound()) p.desc.upperBound.asDouble()?.toFloat() else null
+    val byName = when {
+        "phase" in n -> ParamSpec(0f, 360f, 0f, fmt = "%.0f°")
+        "freq" in n -> ParamSpec(0f, 5f, 0.1f, fmt = "%.2f Hz")
+        "amplitude" in n -> ParamSpec(0f, 100f, 100f)
+        "offset" in n -> ParamSpec(-100f, 100f, 0f)
+        "rotation" in n || "angle" in n || "winkel" in n -> ParamSpec(0f, 360f, 0f, fmt = "%.0f°")
+        "size" in n || "radius" in n || "width" in n || "height" in n || "größe" in n -> ParamSpec(0f, 100f, 50f)
+        "count" in n || "anzahl" in n || "corner" in n || "ecken" in n -> ParamSpec(1f, 12f, 5f)
+        else -> ParamSpec(0f, 100f, 0f, fmt = "%.1f")
+    }
+    return if (lo != null && hi != null && hi > lo) byName.copy(min = lo, max = hi, def = byName.def.coerceIn(lo, hi)) else byName
+}
+
+/**
+ * Editor für einen Effektparameter.
+ *  Schalter-Parameter: Schalter (Vorgabe aus).
+ *  Zahlenparameter: Regler mit Vorgabewert; "Fächern" ist ausgeschaltet und öffnet Start · Verlauf · Ende.
+ *  Alles andere (Auswahllisten wie Play Mode): Auswahl.
  */
 @Composable
 fun ParamEditor(
@@ -106,82 +135,73 @@ fun ParamEditor(
     onNumber: ((Double) -> Unit)? = null
 ) {
     val v = p.value
-    val label = p.label + (p.desc.unit.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "")
+    val label = p.label
+    val spec = paramSpec(p)
+    if (spec.bool) {
+        var on by remember(p.desc.name) { mutableStateOf(if (v?.valueCase == ObjectData.ValueCase.BOOLVALUE) v.boolValue else false) }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+            Switch(checked = on, onCheckedChange = { on = it; onSet(ObjectData.newBuilder().setBoolValue(it).build()) })
+        }
+        return
+    }
     val fan = v?.let { de.sebi.dmxc3remote.net.decodeFan(it) }
-    val numeric = fan != null || p.isNumeric()
+    val numeric = p.desc.enumValuesCount == 0 && (fan != null || p.isNumeric() || v == null || v.valueCase == ObjectData.ValueCase.VALUE_NOT_SET)
     if (numeric && onNumber != null) {
-        var fanOn by remember(p.desc.name, fan != null) { mutableStateOf(fan != null) }
+        var fanOn by remember(p.desc.name) { mutableStateOf(false) }
+        var local by remember(p.desc.name) {
+            mutableFloatStateOf((v?.let { de.sebi.dmxc3remote.net.paramNumber(it) }?.toFloat() ?: spec.def).coerceIn(spec.min, spec.max))
+        }
         Column(Modifier.fillMaxWidth()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(label, style = MaterialTheme.typography.labelLarge)
-                    Text(
-                        v?.let { de.sebi.dmxc3remote.net.paramText(it) }?.ifBlank { "–" } ?: "–",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (fan != null) Desk.Amber else Desk.TextDim
-                    )
-                }
-                if (onFan != null) FilterChip(
-                    selected = fanOn,
-                    onClick = {
-                        // Fächer ausschalten = wieder ein Einzelwert (Startwert des Fächers)
-                        if (fanOn && fan != null) onNumber(fan.from ?: 0.0)
-                        fanOn = !fanOn
-                    },
-                    label = { Text("Fächern") }
-                )
+                Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                if (fan != null && !fanOn) Text(fan.text, style = MaterialTheme.typography.labelSmall, color = Desk.Amber, modifier = Modifier.padding(end = 8.dp))
+                if (onFan != null) SmallChip("Fächern", fanOn, {
+                    // Fächer ausschalten = wieder Einzelwert
+                    if (fanOn && fan != null) onNumber(local.toDouble())
+                    fanOn = !fanOn
+                })
             }
-            if (fanOn && onFan != null) FanParamRow(p, fan, operators, onFan)
-            else NumberRow(p, onNumber)
+            if (fanOn && onFan != null) {
+                FanParamRow(p, fan, operators, spec, local, onFan)
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Slider(local, { local = it; onNumber(it.toDouble()) }, Modifier.weight(1f).height(36.dp), valueRange = spec.min..spec.max)
+                    Text(spec.fmt.format(local), style = MaterialTheme.typography.labelMedium.merge(Numeric), color = Desk.TextDim, modifier = Modifier.width(64.dp).padding(start = 6.dp))
+                }
+            }
         }
         return
     }
     ParamEditorBody(p, label, onSet)
 }
 
-/** Einzelwert: Regler, wenn DMXControl Grenzen nennt, sonst Eingabefeld. */
+/** Start · Verlauf · Ende für einen Effektparameter, mit zwei Reglern im Bereich des Parameters. */
 @Composable
-private fun NumberRow(p: DevParam, onNumber: (Double) -> Unit) {
-    val cur = p.value?.let { de.sebi.dmxc3remote.net.paramNumber(it) } ?: 0.0
-    val lo = if (p.desc.hasLowerBound()) p.desc.lowerBound.asDouble() else null
-    val hi = if (p.desc.hasUpperBound()) p.desc.upperBound.asDouble() else null
-    if (lo != null && hi != null && hi > lo) {
-        var local by remember(p.desc.name) { mutableFloatStateOf(cur.toFloat()) }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Slider(local.coerceIn(lo.toFloat(), hi.toFloat()), { local = it; onNumber(it.toDouble()) },
-                Modifier.weight(1f), valueRange = lo.toFloat()..hi.toFloat())
-            Text("%.2f".format(local), style = MaterialTheme.typography.labelMedium.merge(Numeric), modifier = Modifier.width(52.dp))
-        }
-    } else {
-        var t by remember(p.desc.name, cur) { mutableStateOf(java.math.BigDecimal(cur).setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()) }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            CompactSearch(t, { t = it }, "Wert", Modifier.weight(1f))
-            TextButton(onClick = { t.replace(',', '.').toDoubleOrNull()?.let(onNumber) }) { Text("Setzen") }
-        }
-    }
-}
-
-/** Start / Ende / Verlauf für einen Effektparameter. */
-@Composable
-private fun FanParamRow(p: DevParam, current: de.sebi.dmxc3remote.net.FanInfo?, operators: List<String>, onFan: (Double, Double, String) -> Unit) {
-    val single = p.value?.let { de.sebi.dmxc3remote.net.paramNumber(it) }
-    fun fmt(d: Double?) = d?.let { java.math.BigDecimal(it).setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString() } ?: "0"
-    var from by remember(p.desc.name, current) { mutableStateOf(fmt(current?.from ?: single)) }
-    var to by remember(p.desc.name, current) { mutableStateOf(fmt(current?.to ?: single)) }
+private fun FanParamRow(
+    p: DevParam, current: de.sebi.dmxc3remote.net.FanInfo?, operators: List<String>,
+    spec: ParamSpec, single: Float, onFan: (Double, Double, String) -> Unit
+) {
+    var from by remember(p.desc.name) { mutableFloatStateOf((current?.from?.toFloat() ?: single).coerceIn(spec.min, spec.max)) }
+    var to by remember(p.desc.name) { mutableFloatStateOf((current?.to?.toFloat() ?: if (single == spec.max) spec.min else spec.max).coerceIn(spec.min, spec.max)) }
     val ops = sortedOperators(operators)
-    var op by remember(p.desc.name, current) { mutableStateOf(current?.op?.takeIf { it in ops } ?: ops.first()) }
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            CompactSearch(from, { from = it }, "Start", Modifier.weight(1f))
-            Text(op, style = MaterialTheme.typography.titleMedium, color = Desk.Amber)
-            CompactSearch(to, { to = it }, "Ende", Modifier.weight(1f))
-            TextButton(onClick = {
-                val a = from.replace(',', '.').toDoubleOrNull(); val b = to.replace(',', '.').toDoubleOrNull()
-                if (a != null && b != null) onFan(a, b, op)
-            }) { Text("Setzen") }
+    var op by remember(p.desc.name) { mutableStateOf(current?.op?.takeIf { it in ops } ?: ops.first()) }
+    Column(
+        Modifier.fillMaxWidth().padding(top = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(0.dp)
+    ) {
+        listOf("Start" to from, "Ende" to to).forEachIndexed { i, (n, value) ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(n, style = MaterialTheme.typography.labelMedium, color = Desk.TextDim, modifier = Modifier.width(44.dp))
+                Slider(value, { if (i == 0) from = it else to = it }, Modifier.weight(1f).height(32.dp), valueRange = spec.min..spec.max)
+                Text(spec.fmt.format(value), style = MaterialTheme.typography.labelSmall.merge(Numeric), color = Desk.TextDim, modifier = Modifier.width(64.dp).padding(start = 6.dp))
+            }
         }
-        if (ops.size > 1) LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(ops) { o -> FilterChip(selected = op == o, onClick = { op = o }, label = { Text(o) }) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(ops) { o -> SmallChip(o, op == o, { op = o }) }
+            }
+            TextButton(onClick = { onFan(from.toDouble(), to.toDouble(), op) }) { Text("Setzen") }
         }
     }
 }

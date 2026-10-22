@@ -386,29 +386,23 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
     private fun currentOf(attachableId: String, desc: GenericParameterData) =
         _effectParams.value[attachableId]?.firstOrNull { it.desc.name == desc.name }?.value
 
-    /** Zahlenwert setzen (Regler/Eingabe). Beim ersten Mal je Typ mit Rücklesen und Prüfung. */
+    /**
+     * Zahlenwert setzen (Regler/Eingabe). Zuerst als Zahl; lehnt DMXControl das ab, als Text ("90").
+     * Die angenommene Variante wird je Parametertyp gemerkt. Ein Fehler erscheint nur, wenn
+     * DMXControl beide Varianten ablehnt – nicht, weil sich der Wert nicht zurücklesen lässt.
+     */
     fun setEffectNumber(attachableId: String, desc: GenericParameterData, d: Double) =
         s.throttler.submit("eff:$attachableId:${desc.name}") {
             val key = typeKey(desc)
-            val known = numberMode[key]
-            if (known != null) {
-                runCatching { sendParam(attachableId, desc, numberValue(known, d)) }
-                    .onFailure { s.emit(it.message ?: "Fehler", isError = true) }
-                return@submit
+            val modes = numberMode[key]?.let { listOf(it) } ?: listOf(0, 1)
+            var last: Throwable? = null
+            for (mode in modes) {
+                val r = runCatching { sendParam(attachableId, desc, numberValue(mode, d)) }
+                if (r.isSuccess) { numberMode[key] = mode; return@submit }
+                last = r.exceptionOrNull()
             }
-            for (mode in listOf(0, 1)) {
-                val ok = runCatching { sendParam(attachableId, desc, numberValue(mode, d)) }.isSuccess
-                if (!ok) continue
-                runCatching { readEffectParams(attachableId) }
-                val back = currentOf(attachableId, desc)
-                val n = back?.let { paramNumber(it) }
-                if (n != null && kotlin.math.abs(n - d) < 1e-3 * maxOf(1.0, kotlin.math.abs(d))) {
-                    numberMode[key] = mode
-                    return@submit
-                }
-            }
-            Diag.note("Effektparameter ${desc.name}: Wert $d nicht übernommen, gelesen \"${currentOf(attachableId, desc)?.let { paramText(it) }}\"")
-            s.emit("${desc.displayName.ifBlank { desc.name }}: DMXControl hat den Wert nicht übernommen", isError = true)
+            Diag.note("Effektparameter ${desc.name}: Wert $d abgelehnt: ${last?.message}")
+            s.emit("${desc.displayName.ifBlank { desc.name }}: ${last?.message ?: "abgelehnt"}", isError = true)
         }
 
     /**
@@ -435,24 +429,23 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
             Diag.note("Effekt fächern ${desc.name}: DMXControl lehnt \"${numText(from)} $o ${numText(to)}\" ab: ${check.message.text()}")
             throw UmbraException("Fächer ungültig: ${check.message.text().ifBlank { "von DMXControl abgelehnt" }}")
         }
-        // 2) Senden und prüfen
+        // 2) Senden: zuerst als FannedPropertyValue, sonst als Text "a > b"
         val key = typeKey(desc)
         val modes = fanMode[key]?.let { listOf(it) } ?: listOf(0, 1)
+        var last: Throwable? = null
         for (mode in modes) {
-            val ok = runCatching { sendParam(attachableId, desc, fanValue(mode, desc, o, from, to)) }
-                .onFailure { Diag.note("Effekt fächern ${desc.name} Variante $mode: ${it.message}") }.isSuccess
-            if (!ok) continue
-            readEffectParams(attachableId)
-            val back = currentOf(attachableId, desc)
-            val fan = back?.let { decodeFan(it) }
-            Diag.note("Effekt fächern ${desc.name} Variante $mode: gelesen \"${back?.let { paramText(it) }}\"")
-            if (fan != null) {
+            val r = runCatching { sendParam(attachableId, desc, fanValue(mode, desc, o, from, to)) }
+            if (r.isSuccess) {
                 fanMode[key] = mode
-                s.emit("${desc.displayName.ifBlank { desc.name }}: ${fan.text}")
+                runCatching { readEffectParams(attachableId) }
+                Diag.note("Effekt fächern ${desc.name} Variante $mode angenommen, gelesen \"${currentOf(attachableId, desc)?.let { paramText(it) }}\"")
+                s.emit("${desc.displayName.ifBlank { desc.name }}: ${numText(from)} $o ${numText(to)}")
                 return@act
             }
+            last = r.exceptionOrNull()
+            Diag.note("Effekt fächern ${desc.name} Variante $mode abgelehnt: ${last?.message}")
         }
-        throw UmbraException("DMXControl hat den Fächer nicht übernommen")
+        throw UmbraException("Fächer abgelehnt: ${last?.message ?: "unbekannt"}")
     }
 
     /** Fächer zurücknehmen: wieder ein einzelner Wert. */
@@ -484,7 +477,8 @@ fun decodeFan(v: LumosProtobuf.CommonTypes.ObjectData): FanInfo? {
         val f = runCatching { FannedPropertyValue.parseFrom(v.fallbackProtobuf) }.getOrNull()
         if (f != null) {
             val vals = f.parameterValuesList.ifEmpty { f.fannedValuesList.map { if (it.valueCase == LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.DOUBLEVALUE) it.doubleValue.toString() else it.valueCase.name } }
-            if (vals.isNotEmpty()) return FanInfo(f.operator.ifBlank { ">" }, vals)
+            val clean = vals.filter { it.isNotBlank() }
+            if (clean.size >= 2) return FanInfo(f.operator.ifBlank { ">" }, clean)
         }
     }
     if (v.valueCase == LumosProtobuf.CommonTypes.ObjectData.ValueCase.STRINGVALUE) {
