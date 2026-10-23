@@ -126,6 +126,7 @@ class StageModule(s: UmbraSession) : Module(s, "Bühnenansicht") {
             if (ids.isEmpty()) {
                 delay(500); continue
             }
+            val t0 = System.currentTimeMillis()
             val ext = extended
             val reqs = ArrayList<DevicePropertyValueRequest>()
             val map = HashMap<Int, Triple<String, What, DevicePropertyDescriptor>>()
@@ -206,7 +207,10 @@ class StageModule(s: UmbraSession) : Module(s, "Bühnenansicht") {
                     }
                 }
             }
-            delay(if (ext) 250 else 400)
+            // 3D: so schnell, wie DMXControl antwortet, höchstens ~16 Abfragen pro Sekunde;
+            // 2D-Bühne: 400 ms reichen für Farbe und Helligkeit
+            val took = System.currentTimeMillis() - t0
+            delay(if (ext) (60 - took).coerceAtLeast(5) else 400)
         }
     }
 

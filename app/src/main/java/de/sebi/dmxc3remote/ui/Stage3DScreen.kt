@@ -209,7 +209,7 @@ private fun DrawScope.drawStage(
     // Zeit seit dem letzten Bild für die Glättung (max. 100 ms, damit nach Pausen nichts springt)
     val dt = (if (lastT[0] == 0L) 0L else (clock - lastT[0]).coerceIn(0, 100)) / 1000f
     lastT[0] = clock
-    val kk = (dt * 12f).coerceIn(0f, 1f)
+    val kk = (dt * 20f).coerceIn(0f, 1f)
     val minX = fixtures.minOf { it.pos.x } - 2f; val maxX = fixtures.maxOf { it.pos.x } + 2f
     val minY = fixtures.minOf { it.pos.y } - 2f; val maxY = fixtures.maxOf { it.pos.y } + 4f
     val cam = Camera(V3(0f, (minY + maxY) / 2, 1.2f), yaw, pitch, dist, size.width, size.height)
@@ -230,17 +230,22 @@ private fun DrawScope.drawStage(
     data class Beam(val f: Fixture, val color: Color, val a: Float, val end: V3, val dir: V3, val radius: Float, val gobo: String?)
     val beams = fixtures.mapNotNull { f ->
         val o = live[f.id] ?: return@mapNotNull null
-        val k = (o.intensity ?: if (o.hasColor) 1f else 0f)
-        if (k <= 0.01f) return@mapNotNull null
-        // Strobe: an/aus mit bis zu 12 Hz
-        o.strobe?.let { sp -> val hz = sp.coerceIn(1f, 12f); if ((clock * hz / 1000f).toInt() % 2 == 1) return@mapNotNull null }
-        val base = if (o.hasColor) Color(o.r, o.g, o.b) else Color.White
-        // Richtung: Ausrichtung + Pan um die Hochachse, Neigung aus der Senkrechten
-        // weich nachführen: [pan, tilt, zoom]
-        val st = smooth.getOrPut(f.id) { floatArrayOf(o.pan?.toFloat() ?: 0f, o.tilt?.toFloat() ?: f.rig.tilt, o.zoom ?: 0.5f) }
+        // weich nachführen: [pan, tilt, zoom, helligkeit, r, g, b]
+        val tk = o.intensity ?: if (o.hasColor) 1f else 0f
+        val st = smooth.getOrPut(f.id) {
+            floatArrayOf(o.pan?.toFloat() ?: 0f, o.tilt?.toFloat() ?: f.rig.tilt, o.zoom ?: 0.5f, tk, o.r, o.g, o.b)
+        }
         st[0] += ((o.pan?.toFloat() ?: 0f) - st[0]) * kk
         st[1] += ((o.tilt?.toFloat() ?: f.rig.tilt) - st[1]) * kk
         st[2] += ((o.zoom ?: st[2]) - st[2]) * kk
+        st[3] += (tk - st[3]) * kk
+        st[4] += (o.r - st[4]) * kk; st[5] += (o.g - st[5]) * kk; st[6] += (o.b - st[6]) * kk
+        val k = st[3]
+        if (k <= 0.01f) return@mapNotNull null
+        // Strobe: an/aus mit bis zu 12 Hz (nicht geglättet, soll hart blitzen)
+        o.strobe?.let { sp -> val hz = sp.coerceIn(1f, 12f); if ((clock * hz / 1000f).toInt() % 2 == 1) return@mapNotNull null }
+        val base = if (o.hasColor) Color(st[4].coerceIn(0f, 1f), st[5].coerceIn(0f, 1f), st[6].coerceIn(0f, 1f)) else Color.White
+        // Richtung: Ausrichtung + Pan um die Hochachse, Neigung aus der Senkrechten
         val panDeg = f.rig.yaw + st[0]
         val tiltDeg = if (f.moving && o.tilt != null) st[1] else f.rig.tilt
         val fwd = V3(sin(rad(panDeg)), cos(rad(panDeg)), 0f)
