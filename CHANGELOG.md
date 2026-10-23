@@ -9,19 +9,34 @@
   - Cues: Cue zum Bearbeiten laden, Programmer als neuen Cue anhängen, Cue ersetzen oder zusammenführen; Laden wahlweise blind
   - Speichern zurück in den geladenen Cue bzw. das Preset, mit Rückfrage bei Abhängigkeiten wie in DMXControl
 - Programmer kompakt: Kopfzeile mit Symbolen (Blind, Rückgängig, Leeren, Speichern), schlanke Reiter, Eigenschaften als 48-dp-Zeilen mit Regler und Wert; Farbe, Position und Auswahllisten klappen bei Bedarf auf; Fächern, Effekte und Entfernen im ⋮-Menü
-- Effektauswahl als Raster mit Symbolen (Kurvenformen, Figuren, Filter), gruppiert nach Effect 1D, Effect 2D und Filter
+- Effektauswahl als Raster mit Symbolen, gruppiert nach Effect 1D und Effect 2D
+- Effektparameter (Amplitude, Phase, Frequenz …) mit den Werten aus DMXControl als Regler; Effektparameter fächern (z. B. Phase 0 > 180)
+- Angelegte Effekte bleiben über Neuverbindungen und App-Neustarts sichtbar; Effekte aus DMXControl werden als "Effekt aktiv" gekennzeichnet
 - Geräteliste mit DMX-Adressen (Suche nach Name, Nummer, Modell, Adresse); Adresse und einfache Geräteparameter bearbeitbar
 - Takt als Eingänge in der Eingangszuweisung: "Takt: Tap", "Takt: Beat", "Takt: Impuls", "Takt: BPM"
 - Cuelists: kompakte Zeilenansicht (umschaltbar, wird gespeichert) und Suche – für Projekte mit vielen Cuelists
 - Menüpunkt "Neu synchronisieren"
+- Cues und Cuelists umbenennen
+- Geräteliste nach Gerätegruppe filtern
+- Leiste unten frei anordnen (unter Mehr)
 - Cuelist-Karte mit allen Befehlen aus dem DMXControl-Editor: Go, Go Back, Go Next, Pause, Stopp; Go To und Load je Cue in der Cue-Liste
 
 ## Geändert
 - "Softdesk" heißt in der App jetzt "Bedienfeld", um Verwechslungen mit dem Softdesk von DMXControl zu vermeiden
+- Kompakte Suchfelder, Einstellung "Cuelists kompakt" unter System → Steuerung
+- Programmer zeigt nur bedienbare Eigenschaften (keine Rohwerte mehr)
 
 ## Behoben
 - Go To sprang nicht zum gewählten Cue. Die App ermittelt jetzt beim ersten Sprung, welche Zählweise DMXControl erwartet.
 - Wird nach dem Verbinden ein Projekt geladen oder gewechselt, baut die App die Verbindung automatisch neu auf. Vorher reagierten u. a. Executoren nicht.
+- Programmer-Inhalt aktualisiert sich sofort nach eigenen Änderungen
+- Effekte bleiben nach "Programmer leeren" nicht mehr als Geist in DMXControl stehen
+- Bühne: Farbwahl auch bei Auswahl einzelner Geräte, Live-Farben korrigiert
+- DMX-Monitor zeigt Werte (Kanäle 1-basiert)
+
+## Bekannte Einschränkungen
+- Effekte, die nicht in der App angelegt wurden, lassen sich nicht bearbeiten (die Schnittstelle liefert keine Effekt-IDs).
+- 3D-Bühne: Pan/Tilt-Nullstellung und Zoom-Winkel sind Näherungen, Gobos nur angedeutet.
 
 # Lichtpult Remote 1.0.0
 
