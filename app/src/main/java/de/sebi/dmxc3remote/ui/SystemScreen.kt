@@ -231,12 +231,22 @@ private fun ControlSettings(s: UmbraSession, vm: AppViewModel) {
     val midiNames by vm.midi.names.collectAsStateWithLifecycle()
     val last by vm.midi.last.collectAsStateWithLifecycle()
     val volume by vm.volumeKeysGo.collectAsStateWithLifecycle()
+    val compactCl by vm.cuelistCompact.collectAsStateWithLifecycle()
     val goId by vm.goCuelistId.collectAsStateWithLifecycle()
     val cuelists by s.cuelists.items.collectAsStateWithLifecycle()
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        Section("Darstellung") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Cuelists kompakt anzeigen")
+                    Text("Schlanke Zeilen statt Karten, sinnvoll bei vielen Cuelists", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+                }
+                Switch(checked = compactCl, onCheckedChange = vm::setCuelistCompact)
+            }
+        }
         Section("Externe Tasten") {
             Text(
                 "Fußtaster, Presenter und Medientasten (Bluetooth oder USB) lösen Go bzw. Zurück der Go-Cuelist aus: " +
@@ -267,7 +277,7 @@ private fun ControlSettings(s: UmbraSession, vm: AppViewModel) {
             if (midiNames.isEmpty()) Text("Kein Controller angeschlossen (USB-OTG oder Bluetooth-MIDI).", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
             midiNames.forEach { Text(it) }
             Text(
-                "Zuordnung im Softdesk: Element bearbeiten, \"MIDI lernen\", Taste oder Fader am Controller bewegen.",
+                "Zuordnung im Bedienfeld: Element bearbeiten, \"MIDI lernen\", Taste oder Fader am Controller bewegen.",
                 style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
             )
             last?.let { Text("Zuletzt empfangen: ${if (it.kind == 'N') "Note" else "CC"} ${it.number}, Kanal ${it.channel + 1}, Wert ${it.value}", style = MaterialTheme.typography.bodySmall.merge(Numeric)) }

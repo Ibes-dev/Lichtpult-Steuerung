@@ -17,14 +17,14 @@ muss der Access Point Multicast durchlassen (225.68.67.3, UDP 17474).
 
 ## Funktionen
 Siehe [CHANGELOG.md](CHANGELOG.md). Kurz: Executoren, Cuelists, Master, Macros, Programmer, Bühnenansicht,
-frei konfigurierbares Softdesk (über die Eingangszuweisung), Takt/Tap, Mikrofon-Tempo und -Stimmung,
+frei konfigurierbare Bedienfelder (über die Eingangszuweisung), Takt/Tap, Mikrofon-Tempo und -Stimmung,
 MIDI-Controller, externe Go-Tasten, Diagnose.
 
 ## Sicherheit und Datenschutz
 - Die Verbindung zu DMXControl ist unverschlüsselt (Eigenschaft der Schnittstelle). Nur in vertrauenswürdigen Netzen nutzen.
 - Daten gehen nur an den gewählten DMXControl-Rechner. Das Mikrofon wird nur bei eingeschalteter Erkennung
   genutzt und lokal ausgewertet; keine Aufnahmen werden gespeichert oder übertragen.
-- App-Daten werden nicht in Android-Backups übernommen (Softdesks lassen sich über Export sichern).
+- App-Daten werden nicht in Android-Backups übernommen (Bedienfelder lassen sich über Export sichern).
 
 ## Bauen
 ```

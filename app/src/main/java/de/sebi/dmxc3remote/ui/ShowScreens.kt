@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -36,8 +37,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Stop
@@ -194,10 +197,15 @@ fun CuelistScreen(s: UmbraSession, vm: AppViewModel) {
     val groups by m.groups.collectAsStateWithLifecycle()
     val err by m.error.collectAsStateWithLifecycle()
     var group by rememberSaveable { mutableStateOf<String?>(null) }
+    val compact by vm.cuelistCompact.collectAsStateWithLifecycle()
+    var query by rememberSaveable { mutableStateOf("") }
 
-    val visible = remember(lists, groups, group) {
+    val visible = remember(lists, groups, group, query) {
         val g = group?.let { groups[it] }
-        (if (g != null) g.cuelistIdsList.mapNotNull { lists[it] } else lists.values.toList()).sortedBy { it.number }
+        val q = query.trim().lowercase()
+        (if (g != null) g.cuelistIdsList.mapNotNull { lists[it] } else lists.values.toList())
+            .filter { q.isEmpty() || it.name.lowercase().contains(q) || it.number.toString() == q }
+            .sortedBy { it.number }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -215,8 +223,32 @@ fun CuelistScreen(s: UmbraSession, vm: AppViewModel) {
             }
             OutlinedButton(onClick = m::stopAll, modifier = Modifier.padding(end = 10.dp)) { Text("Alle stoppen") }
         }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            CompactSearch(query, { query = it }, "Cuelist suchen", Modifier.weight(1f))
+        }
         if (visible.isEmpty()) {
-            EmptyHint("Keine Cuelists", "Im Projekt sind keine Cuelists angelegt oder die gewählte Gruppe ist leer.")
+            EmptyHint("Keine Cuelists", if (query.isBlank()) "Im Projekt sind keine Cuelists angelegt oder die gewählte Gruppe ist leer." else "Keine Cuelist passt zur Suche.")
+        } else if (compact) {
+            // Schlanke Zeilen für viele Cuelists: Status, Nummer, Name, aktueller Cue, Go, Stopp
+            LazyVerticalGrid(
+                GridCells.Adaptive(380.dp),
+                Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(visible, key = { it.id }) { cl ->
+                    CuelistRow(
+                        cl, s,
+                        isGo = goId == cl.id,
+                        onDetails = { detailId = cl.id }
+                    )
+                }
+            }
         } else {
             LazyVerticalGrid(
                 GridCells.Adaptive(320.dp),
@@ -240,38 +272,90 @@ fun CuelistScreen(s: UmbraSession, vm: AppViewModel) {
     if (det != null) CuelistDetail(det, s) { detailId = null }
 }
 
+/** Kompakte Zeile (ca. 52 dp hoch) statt Karte. */
+@Composable
+private fun CuelistRow(cl: CuelistDescriptor, s: UmbraSession, isGo: Boolean, onDetails: () -> Unit) {
+    val m = s.cuelists
+    val stateColor = when (cl.state) {
+        ESceneListState.RUNNING -> Desk.Green
+        ESceneListState.PAUSED -> Desk.Amber
+        else -> Desk.Line
+    }
+    Row(
+        Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(8.dp)).background(Desk.Panel).padding(start = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(10.dp).clip(RoundedCornerShape(5.dp)).background(stateColor))
+        Text(
+            "${cl.number}",
+            style = MaterialTheme.typography.labelMedium.merge(Numeric),
+            color = if (isGo) Desk.Amber else Desk.TextDim,
+            modifier = Modifier.width(44.dp).padding(start = 8.dp)
+        )
+        Column(Modifier.weight(1f).clickable(onClick = onDetails)) {
+            Text(cl.name.ifBlank { "Cuelist ${cl.number}" }, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (cl.state != ESceneListState.STOPPED) {
+                Text(cl.cueName(cl.index), style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        androidx.compose.material3.IconButton(onClick = { m.action(cl.id, CuelistActionRequest.EAction.STOP) }) {
+            Icon(Icons.Filled.Stop, contentDescription = "Stopp", tint = Desk.TextDim)
+        }
+        Box(
+            Modifier.width(64.dp).fillMaxHeight().background(Desk.Green).clickable { m.action(cl.id, CuelistActionRequest.EAction.GO) },
+            contentAlignment = Alignment.Center
+        ) { Text("Go", color = Color.Black, style = MaterialTheme.typography.titleSmall) }
+    }
+}
+
 @Composable
 private fun CuelistDetail(cl: CuelistDescriptor, s: UmbraSession, onClose: () -> Unit) {
     val progress by s.cuelists.progress.collectAsStateWithLifecycle()
     val p = progress[cl.id]
+    var renameList by remember { mutableStateOf(false) }
+    var renameCue by remember { mutableStateOf<Pair<String, String>?>(null) }   // cueId to Name
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onClose,
-        title = { Text(cl.name.ifBlank { "Cuelist ${cl.number}" }) },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(cl.name.ifBlank { "Cuelist ${cl.number}" }, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                androidx.compose.material3.IconButton(onClick = { renameList = true }) {
+                    Icon(Icons.Filled.Edit, contentDescription = "Cuelist umbenennen", tint = Desk.TextDim)
+                }
+            }
+        },
         text = {
             androidx.compose.foundation.lazy.LazyColumn(Modifier.height(440.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(cl.cuesList.sortedBy { it.cueIndex }) { c ->
+                itemsIndexedCompat(s.cuelists.cuesOf(cl.id)) { pos, c ->
                     val idx = c.cueIndex
                     val st = p?.cueProgressStateMap?.get(idx)
                     val current = idx == cl.index
                     val next = idx == cl.nextIndex
-                    val nr = if (c.hasCueNumber() && c.cueNumber.numberCount > 0) c.cueNumber.numberList.joinToString(".") else "${idx + 1}"
+                    val nr = if (c.hasCueNumber() && c.cueNumber.numberCount > 0) c.cueNumber.numberList.joinToString(".") else "${pos + 1}"
                     Column(
                         Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
                             .background(if (current) Desk.Green.copy(alpha = 0.18f) else Desk.Raised)
-                            .clickable { s.cuelists.goTo(cl.id, idx) }
-                            .padding(10.dp)
+                            .padding(start = 10.dp, top = 6.dp, bottom = 6.dp, end = 4.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(nr, style = MaterialTheme.typography.labelLarge.merge(Numeric), modifier = Modifier.width(44.dp))
-                            Text(c.name.ifBlank { "Cue $nr" }, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (current) StatusPill("aktiv", Desk.Green) else if (next) StatusPill("nächster", Desk.Amber)
+                            Column(Modifier.weight(1f)) {
+                                Text(c.name.ifBlank { "Cue $nr" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (current) Text("aktiv", style = MaterialTheme.typography.labelSmall, color = Desk.Green)
+                                else if (next) Text("als Nächstes", style = MaterialTheme.typography.labelSmall, color = Desk.Amber)
+                            }
+                            androidx.compose.material3.IconButton(onClick = { renameCue = c.cueId to c.name }, modifier = Modifier.size(36.dp)) {
+                                Icon(Icons.Filled.Edit, contentDescription = "Cue umbenennen", tint = Desk.TextDim, modifier = Modifier.size(18.dp))
+                            }
+                            androidx.compose.material3.TextButton(onClick = { s.cuelists.load(cl.id, pos) }) { Text("Load") }
+                            androidx.compose.material3.TextButton(onClick = { s.cuelists.goTo(cl.id, pos) }) { Text("Go To") }
                         }
                         if (st != null && st.progress > 0.0 && st.progress < 1.0) {
                             androidx.compose.material3.LinearProgressIndicator(
                                 progress = { st.progress.toFloat().coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp, end = 6.dp),
                                 color = Desk.Green
                             )
                             val left = maxOf(st.fadeTimeLeft, st.delayTimeLeft)
@@ -282,8 +366,14 @@ private fun CuelistDetail(cl: CuelistDescriptor, s: UmbraSession, onClose: () ->
             }
         },
         confirmButton = { androidx.compose.material3.TextButton(onClick = onClose) { Text("Schließen") } },
-        dismissButton = { Text("Antippen springt zum Cue", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim) }
+        dismissButton = {
+            Text("Go To: zu diesem Cue springen. Load: als nächsten Cue vorbereiten.", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
+        }
     )
+    if (renameList) RenameDialog("Cuelist umbenennen", cl.name, { s.cuelists.renameCuelist(cl.id, it); renameList = false }) { renameList = false }
+    renameCue?.let { (id, name) ->
+        RenameDialog("Cue umbenennen", name, { s.cuelists.renameCue(cl.id, id, it); renameCue = null }) { renameCue = null }
+    }
 }
 
 private fun CuelistDescriptor.cueName(index: Int): String {
@@ -327,15 +417,26 @@ private fun CuelistCard(cl: CuelistDescriptor, s: UmbraSession, isGo: Boolean, o
             Text("Als Nächstes", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, modifier = Modifier.padding(top = 4.dp))
             Text(cl.cueName(cl.nextIndex), style = MaterialTheme.typography.bodyMedium, color = Desk.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        // Steuerung wie im Cuelist-Editor von DMXControl: Go, Go Back, Go Next, Pause, Stop, Go To / Load
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TransportButton(Icons.Filled.SkipPrevious, "Zurück") { m.action(cl.id, CuelistActionRequest.EAction.GO_BACK) }
             Button(
                 onClick = { m.action(cl.id, CuelistActionRequest.EAction.GO) },
-                modifier = Modifier.weight(1f).height(44.dp),
+                modifier = Modifier.weight(1f).height(48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Desk.Green, contentColor = Color.Black)
             ) { Text("Go", style = MaterialTheme.typography.titleMedium) }
             TransportButton(Icons.Filled.Pause, "Pause") { m.action(cl.id, CuelistActionRequest.EAction.PAUSE) }
             TransportButton(Icons.Filled.Stop, "Stopp") { m.action(cl.id, CuelistActionRequest.EAction.STOP) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(onClick = { m.action(cl.id, CuelistActionRequest.EAction.GO_BACK) }, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Filled.SkipPrevious, null, Modifier.size(18.dp)); Text(" Go Back", maxLines = 1)
+            }
+            OutlinedButton(onClick = { m.action(cl.id, CuelistActionRequest.EAction.GO_NEXT) }, modifier = Modifier.weight(1f)) {
+                Text("Go Next ", maxLines = 1); Icon(Icons.Filled.SkipNext, null, Modifier.size(18.dp))
+            }
+        }
+        OutlinedButton(onClick = onDetails, modifier = Modifier.fillMaxWidth()) {
+            Text("Go To / Load: Cue auswählen", maxLines = 1)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Intensität", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim, modifier = Modifier.width(72.dp))
@@ -581,6 +682,7 @@ private fun BeatSection(s: UmbraSession, vm: AppViewModel) {
                             view.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
                             if (micAuto) m.syncAt(unix, timeBase)           // Hybrid: Mikro = Tempo, Tap = Phase
                             else m.tap(unix, tapMode, timeBase, rounding)
+                            s.beatInputs.tapped()                          // Eingang "Takt: Tap" in DMXControl
                         }
                     },
                 contentAlignment = Alignment.Center
@@ -826,3 +928,9 @@ private fun AudioRow(p: PlayerThreadDescriptor, s: UmbraSession) {
         }
     }
 }
+
+/** items mit Index für LazyColumn (ohne zusätzlichen Import-Konflikt). */
+private fun <T> androidx.compose.foundation.lazy.LazyListScope.itemsIndexedCompat(
+    list: List<T>,
+    content: @Composable androidx.compose.foundation.lazy.LazyItemScope.(Int, T) -> Unit
+) = items(list.size) { i -> content(i, list[i]) }

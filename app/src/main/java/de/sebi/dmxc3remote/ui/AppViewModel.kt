@@ -70,6 +70,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val retryNow = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
 
     val midi = MidiHub(app)
+    val stage3d = de.sebi.dmxc3remote.net.Stage3DStore(app)
+
+    init { de.sebi.dmxc3remote.net.EffectMemory.init(app) }
     val mic = MicBeatDetector()
 
     private val _profiles = MutableStateFlow(prefs.profiles)
@@ -82,6 +85,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val beatHaptic = MutableStateFlow(prefs.beatHaptic)
     val micAutoApply = MutableStateFlow(prefs.micAutoApply)
     val micToDmxc = MutableStateFlow(prefs.micToDmxc)
+    val cuelistCompact = MutableStateFlow(prefs.cuelistCompact)
     val navOrder = MutableStateFlow(prefs.navOrder)
     val goCuelistId = MutableStateFlow(prefs.goCuelistId)
     val volumeKeysGo = MutableStateFlow(prefs.volumeKeysGo)
@@ -139,6 +143,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setBeatHaptic(v: Boolean) { prefs.beatHaptic = v; beatHaptic.value = v }
     fun setMicAutoApply(v: Boolean) { prefs.micAutoApply = v; micAutoApply.value = v }
     fun setMicToDmxc(v: Boolean) { prefs.micToDmxc = v; micToDmxc.value = v }
+    fun setCuelistCompact(v: Boolean) { prefs.cuelistCompact = v; cuelistCompact.value = v }
     fun setNavOrder(names: List<String>) { val v = names.joinToString(","); prefs.navOrder = v; navOrder.value = v }
 
     /** Mikrofon im ViewModel-Scope: läuft weiter, auch wenn der Medien-Tab verlassen wird. */
@@ -300,6 +305,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     throw e
                 } catch (e: VirtualMachineError) {
                     throw e
+                } catch (e: de.sebi.dmxc3remote.net.ProjectReloadedException) {
+                    // kein Fehler: sofort neu verbinden (finally räumt die alte Sitzung auf)
+                    Diag.note("Projekt geladen, Sitzung wird neu aufgebaut")
+                    attempt = 0
+                    continue
                 } catch (e: Throwable) {
                     failure = e.describe()
                     if (failure.contains("abgelehnt") || failure.contains("verweigert") || failure.contains("NetID")) {
@@ -320,6 +330,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    /** Manuell neu synchronisieren (Menü): Sitzung neu aufbauen. */
+    fun resync() {
+        val c = _conn.value
+        val t = when (c) {
+            is ConnState.Connected -> c.target
+            is ConnState.Failed -> c.target
+            is ConnState.Connecting -> c.target
+            else -> null
+        } ?: return
+        connect(t)
     }
 
     fun disconnect() {

@@ -28,7 +28,7 @@ import kotlinx.coroutines.launch
  *  - Registrierung per Added, Werte per Changed + sourceValue
  *  - additionalSupportedIoTypes erweitert die verbindbaren Typen in der Eingangszuweisung
  */
-class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module(s, "Softdesk") {
+class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module(s, "Bedienfeld") {
     private val stub = InputClientCoroutineStub(s.channel)
 
     private val _feedback = MutableStateFlow<Map<String, ObjectData>>(emptyMap())
@@ -214,7 +214,7 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
         // Achtung: träfe auch eine zweite, parallel verbundene Installation auf einem anderen Gerät.
         // ".mic." = Eingänge der Mikrofon-Analyse, gehören nicht zum Softdesk
         val mine: (String) -> Boolean = { id ->
-            !id.contains(".mic.") && (id.startsWith(prefix) || (includeOldInstalls && id.startsWith("DMXC3Remote.")))
+            !id.contains(".mic.") && !id.contains(".beat.") && (id.startsWith(prefix) || (includeOldInstalls && id.startsWith("DMXC3Remote.")))
         }
         val sources = stub.dl(10).getInputSources(s.getMultiple(), s.headers).sourcesList
             .map { it.element.id }.filter { mine(it) && it !in validSources }
@@ -304,7 +304,7 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
                 errors++
             }
         }
-        if (errors > 0) s.emit("Softdesk: $errors Element(e) nicht angemeldet", isError = true)
+        if (errors > 0) s.emit("Bedienfeld: $errors Element(e) nicht angemeldet", isError = true)
         _registered.value = active.size
         if (changed || errors > 0 || _serverCounts.value == null) runCatching { verify() }.onFailure { _serverCounts.value = null }
     }
@@ -381,11 +381,11 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
                 .setRuntimeId(s.runtimeId)
                 .build(),
             s.headers
-        ).requireOk("Softdesk ${e.name}")
+        ).requireOk("Bedienfeld ${e.name}")
     }
 
     /** Taste: sendet je nach Werttyp Bool, Zahl oder Text (konfigurierbare An/Aus-Werte). */
-    fun button(e: SdElement, on: Boolean) = act("Softdesk") {
+    fun button(e: SdElement, on: Boolean) = act("Bedienfeld") {
         val raw = if (on) e.onValue else e.offValue
         val v = when (e.sendIo) {
             SdIo.BOOL -> ObjectData.newBuilder().setBoolValue(on)

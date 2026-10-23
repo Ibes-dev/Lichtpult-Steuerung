@@ -12,16 +12,21 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -148,5 +153,113 @@ fun ChannelStrip(
             verticalArrangement = Arrangement.spacedBy(6.dp),
             content = content
         )
+    }
+}
+
+/**
+ * Schlankes Suchfeld (40 dp hoch) statt des großen OutlinedTextField – spart auf dem Handy Platz.
+ * Mit Lupe, Platzhalter und Löschen-Kreuz.
+ */
+@Composable
+fun CompactSearch(
+    value: String,
+    onChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier
+) {
+    androidx.compose.foundation.layout.Row(
+        modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(Desk.Raised)
+            .padding(start = 12.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        androidx.compose.material3.Icon(
+            Icons.Filled.Search, contentDescription = null,
+            tint = Desk.TextDim, modifier = Modifier.size(18.dp)
+        )
+        androidx.compose.foundation.layout.Box(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+            if (value.isEmpty()) Text(placeholder, style = MaterialTheme.typography.bodyMedium, color = Desk.TextDim, maxLines = 1)
+            androidx.compose.foundation.text.BasicTextField(
+                value = value,
+                onValueChange = onChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = Desk.Text),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(Desk.Amber),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        if (value.isNotEmpty()) {
+            androidx.compose.material3.IconButton(onClick = { onChange("") }, modifier = Modifier.size(32.dp)) {
+                androidx.compose.material3.Icon(
+                    Icons.Filled.Close, contentDescription = "Suche löschen",
+                    tint = Desk.TextDim, modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+/** Einfacher Umbenennen-Dialog. */
+@Composable
+fun RenameDialog(title: String, initial: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    var text by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(initial) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            androidx.compose.material3.OutlinedTextField(
+                text, { text = it }, singleLine = true, label = { Text("Name") }, modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(enabled = text.isNotBlank() && text != initial, onClick = { onConfirm(text.trim()) }) { Text("Umbenennen") }
+        },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Abbrechen") } }
+    )
+}
+
+/** Kleiner Auswahl-Chip (30 dp hoch), z. B. für Gerätegruppen. */
+@Composable
+fun SmallChip(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .height(30.dp)
+            .clip(RoundedCornerShape(15.dp))
+            .background(if (selected) Desk.Amber else Desk.Raised)
+            .clickableNoRipple(onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) Color.Black else Desk.Text
+        )
+    }
+}
+
+/** Schlanke Reiter mit Unterstrich (36 dp hoch). */
+@Composable
+fun SmallTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth().height(36.dp)) {
+        labels.forEachIndexed { i, t ->
+            Column(
+                Modifier.weight(1f).fillMaxHeight().clickableNoRipple { onSelect(i) },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    t, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (i == selected) Desk.Amber else Desk.TextDim
+                )
+                Box(
+                    Modifier.padding(top = 4.dp).height(2.dp).width(28.dp)
+                        .background(if (i == selected) Desk.Amber else Color.Transparent)
+                )
+            }
+        }
     }
 }

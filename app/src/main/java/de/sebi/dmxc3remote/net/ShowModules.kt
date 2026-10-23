@@ -357,8 +357,99 @@ class CuelistModule(s: UmbraSession) : Module(s, "Cuelists") {
         ).requireOk("CuelistAction")
     }
 
-    /** Direkt zu einem Cue springen (GO_TO mit Cue-Index). */
-    fun goTo(id: String, cueIndex: Int) = action(id, CuelistActionRequest.EAction.GO_TO, cueIndex)
+    /**
+     * Index-Basis für GO_TO/LOAD. Das Proto sagt nur "index … e.g. GoTo". Möglich sind Listenposition
+     * 0-basiert, 1-basiert oder das Feld cueIndex. Die App probiert der Reihe nach und merkt sich,
+     * was DMXControl tatsächlich anspringt (Kontrolle über den gemeldeten aktuellen Cue).
+     */
+    @Volatile private var indexMode: Int? = null   // 0 = Position, 1 = Position+1, 2 = cueIndex
+
+    private fun indexFor(mode: Int, pos: Int, cueIndex: Int) = when (mode) {
+        0 -> pos
+        1 -> pos + 1
+        else -> cueIndex
+    }
+
+    /** Cue umbenennen (CueClient.SetCueValue, Feld name). */
+    fun renameCue(cuelistId: String, cueId: String, name: String) = act("Cue umbenennen") {
+        val cue = _items.value[cuelistId]?.cuesList?.firstOrNull { it.cueId == cueId }
+        LumosProtobufClient.CueClientGrpcKt.CueClientCoroutineStub(s.channel).dl(5).setCueValue(
+            LumosProtobuf.Cue.CueServiceTypes.SetCueValueRequest.newBuilder()
+                .setRequestId(s.nextRequestId())
+                .setCueId(cueId)
+                .setParentContainerId(cue?.parentContainerId?.ifBlank { null } ?: cuelistId)
+                .setName(name)
+                .build(),
+            s.headers
+        ).requireOk("Cue umbenennen")
+        s.emit("Cue umbenannt in \"$name\"")
+    }
+
+    /**
+     * Cuelist umbenennen. Die Cuelist-Schnittstelle hat dafür keinen eigenen Aufruf; der Name wird
+     * über die allgemeine Parameter-Schnittstelle gesetzt (type "Cuelist", Parameter "Name").
+     */
+    fun renameCuelist(cuelistId: String, name: String) = act("Cuelist umbenennen") {
+        val par = LumosProtobufClient.ParameterClientGrpcKt.ParameterClientCoroutineStub(s.channel)
+        val r = par.dl(10).getParameters(
+            LumosProtobuf.ParameterServiceTypes.GetParametersRequest.newBuilder()
+                .setType("Cuelist").setId(cuelistId).setIncludingValues(true).setUserContextId(s.userContextId).build(),
+            s.headers
+        )
+        val p = r.parametersList.firstOrNull { it.name.equals("Name", true) }
+            ?: r.parametersList.firstOrNull { it.name.contains("name", true) || it.displayName.contains("name", true) }
+            ?: throw UmbraException("DMXControl bietet für Cuelists keinen Namensparameter an")
+        par.dl(5).setParameterValue(
+            LumosProtobuf.ParameterServiceTypes.SetTestParameterValueRequest.newBuilder()
+                .setId(cuelistId).setParameter(p).setUserContextId(s.userContextId)
+                .setValue(LumosProtobuf.CommonTypes.ObjectData.newBuilder().setStringValue(name)).build(),
+            s.headers
+        ).requireOk("Cuelist umbenennen")
+        s.emit("Cuelist umbenannt in \"$name\"")
+    }
+
+    /** Index für Aktionen, die einen Cue adressieren (gleiche Basis wie Go To, sobald erkannt). */
+    fun indexOf(id: String, pos: Int): Int {
+        val cue = cuesOf(id).getOrNull(pos) ?: return pos
+        return indexFor(indexMode ?: 0, pos, cue.cueIndex)
+    }
+
+    /** Liste der Cues in der Reihenfolge, wie DMXControl sie führt. */
+    fun cuesOf(id: String) = _items.value[id]?.cuesList?.sortedBy { it.cueIndex } ?: emptyList()
+
+    /** Zu einem Cue springen (GO_TO). pos = Position in [cuesOf]. */
+    fun goTo(id: String, pos: Int) = act("Go To") {
+        val cue = cuesOf(id).getOrNull(pos) ?: return@act
+        val known = indexMode
+        val modes = if (known != null) listOf(known) else listOf(0, 2, 1).distinctBy { indexFor(it, pos, cue.cueIndex) }
+        for (mode in modes) {
+            stub.dl(3).cuelistAction(
+                CuelistActionRequest.newBuilder()
+                    .setRequestId(s.nextRequestId())
+                    .setCuelistId(id)
+                    .setAction(CuelistActionRequest.EAction.GO_TO)
+                    .setIndex(indexFor(mode, pos, cue.cueIndex))
+                    .build(),
+                s.headers
+            ).requireOk("Go To")
+            if (known != null) return@act
+            // Rückmeldung abwarten: steht die Cuelist jetzt auf dem gewünschten Cue?
+            delay(700)
+            val now = _items.value[id]
+            if (now != null && (now.index == cue.cueIndex || now.index == pos)) {
+                indexMode = mode
+                Diag.note("Go To: Index-Basis erkannt = ${listOf("Position", "Position+1", "cueIndex")[mode]}")
+                return@act
+            }
+        }
+        s.emit("Go To: DMXControl hat den Cue nicht angesprungen", isError = true)
+    }
+
+    /** Cue als nächsten laden, ohne ihn auszuführen (LOAD). Gleiche Index-Basis wie Go To. */
+    fun load(id: String, pos: Int) {
+        val cue = cuesOf(id).getOrNull(pos) ?: return
+        action(id, CuelistActionRequest.EAction.LOAD, indexFor(indexMode ?: 0, pos, cue.cueIndex))
+    }
 
     fun stopAll() = act("Alle Cuelists stoppen") {
         stub.dl(5).allCuelistAction(

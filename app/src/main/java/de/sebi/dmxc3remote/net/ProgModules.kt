@@ -263,8 +263,45 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
     val attachables: StateFlow<List<AttachableData>> = _attachables.asStateFlow()
 
     /** Vom Server bestätigte Effekt-IDs je "Gruppe:Eigenschaft" (zum Entfernen). */
-    private val _applied = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    private val _applied = MutableStateFlow<Map<String, List<String>>>(EffectMemory.loadApplied())
     val applied: StateFlow<Map<String, List<String>>> = _applied.asStateFlow()
+
+    /** Anzeigename je angewendeter Effekt-Instanz. */
+    private val _effectNames = MutableStateFlow<Map<String, String>>(EffectMemory.loadNames())
+    val effectNames: StateFlow<Map<String, String>> = _effectNames.asStateFlow()
+
+    /** Gruppen:Eigenschaften, auf denen DMXControl Effekte führt (auch ohne Zuordnung in der App). */
+    private val _effectState = MutableStateFlow<Set<String>>(emptySet())
+    val effectState: StateFlow<Set<String>> = _effectState.asStateFlow()
+
+    /**
+     * Abgleich mit DMXControl (GetAttachableState): gemerkte Effekte auf Gruppen, die keinen Effekt mehr
+     * haben, werden verworfen (z. B. nach Leeren am PC). Liefert außerdem, wo überhaupt Effekte liegen.
+     */
+    suspend fun syncEffects() {
+        val r = runCatching {
+            progStub.dl(5).getAttachableState(
+                LumosProtobuf.ProgrammerServiceTypes.AttachableStateRequest.newBuilder()
+                    .setRequestId(s.nextRequestId()).setUserContextId(s.userContextId).build(),
+                s.headers
+            )
+        }.getOrNull() ?: return
+        val withFx = r.attachableStatesList.flatMap { st -> st.devicePropertiesList.map { "${st.deviceGroup}:$it" } }.toSet()
+        val groupsWithFx = r.attachableStatesList.map { it.deviceGroup }.toSet()
+        _effectState.value = withFx
+        // Nur aufräumen, wenn DMXControl Gruppen-IDs meldet (nicht Namen) – sonst könnte alles verworfen werden
+        if (groupsWithFx.isEmpty()) {
+            // Keine Effekte gemeldet: nur verwerfen, wenn auch der Programmer leer ist
+            // (meldet DMXControl über die Schnittstelle angelegte Effekte nicht, bleiben sie so erhalten)
+            if (s.programmer.content.value.isEmpty()) { _applied.value = emptyMap(); EffectMemory.save(emptyMap(), emptyMap()) }
+            return
+        }
+        val idsLookRight = groupsWithFx.any { it in _groups.value.keys } ||
+            _applied.value.keys.any { it.substringBefore(':') in groupsWithFx }
+        if (idsLookRight) _applied.update { m -> m.filterKeys { k -> k.substringBefore(':') in groupsWithFx || k.startsWith("DEVICES:") } }
+        else Diag.note("Effektabgleich: DMXControl meldet Gruppen als ${groupsWithFx.take(3)} – nicht abgeglichen")
+        EffectMemory.save(_applied.value, _effectNames.value)
+    }
 
     @Volatile private var selectedGroup: String? = null
 
@@ -304,6 +341,7 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
                 .sortedBy { it.displayName.ifBlank { it.name } }
         }.getOrDefault(emptyList())
         selectedGroup?.let { readBack(it) }
+        syncEffects()
     }
 
     /** Liest alle Eigenschaften der Gruppe aus dem Programmer (GetProgrammerValue, Typ PROGRAMMER). */
@@ -433,9 +471,46 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
                 .build(),
             s.headers
         )
+        s.programmer.touch()
         val id = r.attachable.id.ifBlank { a.id }
         _applied.update { m -> m + ("$groupId:$propertyId" to ((m["$groupId:$propertyId"] ?: emptyList()) + id)) }
-        s.emit("Effekt ${a.displayName.ifBlank { a.name }} gesetzt")
+        _effectNames.update { it + (id to a.displayName.ifBlank { a.name }) }
+        EffectMemory.save(_applied.value, _effectNames.value)
+        runCatching { syncEffects() }
+        runCatching { s.programmer.readEffectParams(id) }
+    }
+
+    fun removeEffect(groupId: String, propertyId: String, id: String) = act("Effekt entfernen") {
+        progStub.dl(5).deleteProgrammerAttachable(
+            DeleteProgrammerAttachableRequest.newBuilder().setRequestId(s.nextRequestId()).setAttachableId(id)
+                .setUserContextId(s.userContextId).build(),
+            s.headers
+        ).requireOk("DeleteProgrammerAttachable")
+        _applied.update { m -> m + ("$groupId:$propertyId" to ((m["$groupId:$propertyId"] ?: emptyList()) - id)) }
+        EffectMemory.save(_applied.value, _effectNames.value)
+    }
+
+    /** Alle Effekte einer Eigenschaft löschen (ohne eigene Fehlerbehandlung, für Programmer-Aktionen). */
+    suspend fun deleteEffects(groupId: String, propertyId: String) {
+        val key = "$groupId:$propertyId"
+        (_applied.value[key] ?: emptyList()).forEach { id -> runCatching { deleteAttachable(id) } }
+        _applied.update { it - key }
+        EffectMemory.save(_applied.value, _effectNames.value)
+    }
+
+    /** Alle in dieser Sitzung angelegten Effekte löschen. */
+    suspend fun deleteAllEffects() {
+        _applied.value.values.flatten().forEach { id -> runCatching { deleteAttachable(id) } }
+        _applied.value = emptyMap()
+        EffectMemory.save(_applied.value, _effectNames.value)
+    }
+
+    private suspend fun deleteAttachable(id: String) {
+        progStub.dl(5).deleteProgrammerAttachable(
+            DeleteProgrammerAttachableRequest.newBuilder().setRequestId(s.nextRequestId()).setAttachableId(id)
+                .setUserContextId(s.userContextId).build(),
+            s.headers
+        ).requireOk("DeleteProgrammerAttachable")
     }
 
     fun removeEffects(groupId: String, propertyId: String) = act("Effekte entfernen") {
@@ -483,6 +558,10 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
     private fun devicesOf(id: String) = id.removePrefix(MULTI).split(',').filter { it.isNotBlank() }
 
     private suspend fun setValue(groupId: String, propertyId: String, value: DevicePropertyValue) {
+        try { setValueRaw(groupId, propertyId, value) } finally { s.programmer.touch() }
+    }
+
+    private suspend fun setValueRaw(groupId: String, propertyId: String, value: DevicePropertyValue) {
         if (isMulti(groupId)) {
             // UNVERIFIZIERT: Programmer-Wert je Gerät, Geräte-ID im Feld groupId
             devicesOf(groupId).forEach { dev ->
@@ -632,5 +711,30 @@ class PresetModule(s: UmbraSession) : Module(s, "Presets") {
             .setPresetId(presetId)
         if (groupId != null) b.setDeviceGroupId(groupId) else b.setForceInvokeAll(true)
         stub.dl(5).invokePreset(b.build(), s.headers).requireOk("InvokePreset")
+    }
+}
+
+/**
+ * Angewendete Effekte über Neuverbindungen und App-Neustarts merken: Die Schnittstelle liefert keine
+ * Liste der Effekt-Instanzen im Programmer, nur deren IDs beim Anlegen.
+ */
+object EffectMemory {
+    private var sp: android.content.SharedPreferences? = null
+    fun init(ctx: android.content.Context) { sp = ctx.getSharedPreferences("effects", android.content.Context.MODE_PRIVATE) }
+
+    fun loadApplied(): Map<String, List<String>> = runCatching {
+        val o = org.json.JSONObject(sp?.getString("applied", "{}") ?: "{}")
+        o.keys().asSequence().associateWith { k -> val a = o.getJSONArray(k); (0 until a.length()).map { a.getString(it) } }
+    }.getOrDefault(emptyMap())
+
+    fun loadNames(): Map<String, String> = runCatching {
+        val o = org.json.JSONObject(sp?.getString("names", "{}") ?: "{}")
+        o.keys().asSequence().associateWith { o.getString(it) }
+    }.getOrDefault(emptyMap())
+
+    fun save(applied: Map<String, List<String>>, names: Map<String, String>) {
+        val a = org.json.JSONObject(); applied.forEach { (k, v) -> if (v.isNotEmpty()) a.put(k, org.json.JSONArray(v)) }
+        val n = org.json.JSONObject(); names.filterKeys { id -> applied.values.any { id in it } }.forEach { (k, v) -> n.put(k, v) }
+        sp?.edit()?.putString("applied", a.toString())?.putString("names", n.toString())?.apply()
     }
 }

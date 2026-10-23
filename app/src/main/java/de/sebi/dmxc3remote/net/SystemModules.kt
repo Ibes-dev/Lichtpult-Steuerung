@@ -40,8 +40,22 @@ class ProjectModule(s: UmbraSession) : Module(s, "Projekt") {
     private val _saving = MutableStateFlow<String?>(null)
     val saving: StateFlow<String?> = _saving.asStateFlow()
 
+    /** true, sobald nach dem Verbinden ein Projekt (neu) geladen wurde -> Sitzung muss neu synchronisieren. */
+    private val _reloaded = MutableStateFlow(false)
+    val reloaded: StateFlow<Boolean> = _reloaded.asStateFlow()
+
+    private var lastLoaded: Boolean? = null
+    private var sawLoading = false
+
     private suspend fun query() {
-        _state.value = stub.dl(5).getProjectState(s.getRequest(), s.headers).state
+        val r = stub.dl(5).getProjectState(s.getRequest(), s.headers)
+        _state.value = r.state
+        val loaded = r.isLoaded && r.state == EProjectState.EProjectState_LOADED
+        if (r.state == EProjectState.EProjectState_LOADING || r.state == EProjectState.EProjectState_CLOSING) sawLoading = true
+        // Wechsel "kein Projekt -> Projekt" oder "Laden beobachtet -> geladen" = neues Projekt
+        if (loaded && (lastLoaded == false || sawLoading)) _reloaded.value = true
+        if (loaded) sawLoading = false
+        lastLoaded = loaded
         _dirty.value = stub.dl(5).getProjectDirty(
             ProjectDirtyRequest.newBuilder().setRequestId(s.nextRequestId()).setQuickResponse(true).build(),
             s.headers
@@ -50,10 +64,22 @@ class ProjectModule(s: UmbraSession) : Module(s, "Projekt") {
 
     override suspend fun load() = query()
 
-    /** Kein Push-Stream für Clients ohne Projektdaten -> Polling alle 5 s. */
-    override suspend fun stream() {
+    /**
+     * Projektwechsel erkennen: Projekt-Änderungs-Stream als Auslöser (neue Version geladen),
+     * zusätzlich Zustandsabfrage alle 2 s.
+     */
+    override suspend fun stream() = kotlinx.coroutines.coroutineScope {
+        launch {
+            runCatching {
+                stub.receiveProjectChanges(s.getRequest(), s.headers).collect { m ->
+                    // Laden einer Projektversion meldet sich als geänderte Version; Speichern auch.
+                    // Darum nur kurz nachfragen statt sofort neu zu verbinden.
+                    if (m.changedDataCase == LumosProtobuf.ProjectServiceTypes.ProjectChangedMessage.ChangedDataCase.VERSION) query()
+                }
+            }
+        }
         while (true) {
-            delay(5_000)
+            delay(2_000)
             query()
         }
     }
