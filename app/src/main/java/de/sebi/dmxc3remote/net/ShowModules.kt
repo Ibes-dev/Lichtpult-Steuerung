@@ -146,27 +146,80 @@ class MasterModule(s: UmbraSession) : Module(s, "Master") {
     }
 
     /**
-     * UNVERIFIZIERT: Welcher Eintrag der faders-Map den Hauptfader meint, ist nicht dokumentiert.
-     * Es wird der erste Eintrag verwendet (Name aus dem Descriptor, sonst Map-Key).
+     * Welcher Eintrag der faders-Map den Hauptfader meint und ob DMXControl "absolut" oder "increment"
+     * erwartet, ist nicht dokumentiert. DMXControl bestätigt Befehle auch dann, wenn es sie nicht umsetzt.
+     * Deshalb: Varianten der Reihe nach senden, am gemeldeten Masterwert prüfen, ob er sich bewegt,
+     * und die funktionierende Variante merken.
      */
-    fun setFader(master: MasterDescriptor, value: Double) = s.throttler.submit("master:${master.masterId}") {
-        val entry = master.fadersMap.entries.firstOrNull()
-        val name = if (entry == null) "" else entry.value.name.ifBlank { entry.key }
+    private data class FaderWay(val name: String, val increment: Boolean, val label: String)
+
+    @Volatile private var faderWay: FaderWay? = null
+    @Volatile private var probing = false
+
+    private fun valueOf(m: MasterDescriptor?): Double? = when (m?.masterValueCase) {
+        MasterDescriptor.MasterValueCase.INTENSITY -> m.intensity
+        MasterDescriptor.MasterValueCase.PARAMETER -> m.parameter
+        MasterDescriptor.MasterValueCase.SPEED -> m.speed
+        else -> null
+    }
+
+    private fun ways(master: MasterDescriptor): List<FaderWay> {
+        val names = buildList {
+            master.fadersMap.forEach { (k, v) -> add(k); if (v.name.isNotBlank()) add(v.name) }
+            add("")
+        }.distinct()
+        return names.map { FaderWay(it, false, "absolut \"$it\"") } + names.map { FaderWay(it, true, "increment \"$it\"") }
+    }
+
+    private suspend fun send(master: MasterDescriptor, way: FaderWay, target: Double) {
+        val cur = valueOf(_items.value[master.masterId]) ?: 0.0
+        val f = MasterFaderDescriptor.newBuilder().setMasterId(master.masterId).setName(way.name)
+        if (way.increment) f.setIncrement(target - cur) else f.setAbsolut(target)
         stub.dl(3).setMasterValue(
             SetMasterValueRequest.newBuilder()
                 .setRequestId(s.nextRequestId())
                 .setMasterId(master.masterId)
                 .setUserContextId(s.userContextId)
-                .setFader(
-                    MasterFaderDescriptor.newBuilder()
-                        .setMasterId(master.masterId)
-                        .setName(name)
-                        .setAbsolut(value.coerceIn(0.0, 1.0))
-                        .build()
-                )
+                .setFader(f)
                 .build(),
             s.headers
         ).requireOk("SetMasterValue")
+    }
+
+    fun setFader(master: MasterDescriptor, value: Double) = s.throttler.submit("master:${master.masterId}") {
+        val target = value.coerceIn(0.0, 1.0)
+        val known = faderWay
+        if (known != null) { send(master, known, target); return@submit }
+        if (probing) return@submit
+        // Erkennung nur mit spürbarer Änderung, sonst ist "keine Wirkung" nicht von "schon dort" zu unterscheiden
+        valueOf(_items.value[master.masterId])?.let { if (kotlin.math.abs(it - target) < 0.03) return@submit }
+        probing = true
+        try {
+            Diag.note("Master ${master.name}: Fader-Einträge " + master.fadersMap.entries.joinToString { "${it.key}=\"${it.value.name}\"" }.ifBlank { "keine" })
+            for (way in ways(master)) {
+                val before = valueOf(_items.value[master.masterId])
+                val r = runCatching { send(master, way, target) }
+                if (r.isFailure) { Diag.note("Master-Fader ${way.label}: abgelehnt: ${r.exceptionOrNull()?.message}"); continue }
+                // Rückmeldung über den Änderungs-Stream abwarten
+                var moved = false
+                for (i in 0 until 8) {
+                    delay(60)
+                    val now = valueOf(_items.value[master.masterId])
+                    if (now != null && (before == null || kotlin.math.abs(now - before) > 0.005) && kotlin.math.abs(now - target) < 0.05) { moved = true; break }
+                }
+                if (!moved) {
+                    // Stream meldet evtl. nicht: direkt nachfragen
+                    runCatching { load() }
+                    val now = valueOf(_items.value[master.masterId])
+                    moved = now != null && kotlin.math.abs(now - target) < 0.05
+                }
+                Diag.note("Master-Fader ${way.label}: ${if (moved) "wirkt" else "keine Wirkung"}")
+                if (moved) { faderWay = way; return@submit }
+            }
+            s.emit("Master: DMXControl setzt den Fader nicht (Details unter Diagnose)", isError = true)
+        } finally {
+            probing = false
+        }
     }
 }
 
