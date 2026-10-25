@@ -440,11 +440,13 @@ private fun CuelistCard(cl: CuelistDescriptor, s: UmbraSession, isGo: Boolean, o
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Intensität", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim, modifier = Modifier.width(72.dp))
-            Slider(
-                value = if (dragging) local else cl.intensity.toFloat().coerceIn(0f, 1f),
-                onValueChange = { v -> dragging = true; local = v; m.setIntensity(cl.id, v.toDouble()) },
-                onValueChangeFinished = { dragging = false },
-                modifier = Modifier.weight(1f)
+            DeskFader(
+                if (dragging) local else cl.intensity.toFloat().coerceIn(0f, 1f),
+                { v -> dragging = true; local = v; m.setIntensity(cl.id, v.toDouble()) },
+                Desk.Green,
+                Modifier.weight(1f).height(36.dp),
+                vertical = false,
+                onRelease = { dragging = false }
             )
             Text(
                 pct(if (dragging) local.toDouble() else cl.intensity),
@@ -466,59 +468,6 @@ fun EMasterType.label(): String = when (this) {
     EMasterType.POSITION -> "Position"
     EMasterType.SPEED -> "Geschwindigkeit"
     else -> "Master"
-}
-
-@Composable
-fun MasterScreen(s: UmbraSession) {
-    val m = s.masters
-    val masters by m.items.collectAsStateWithLifecycle()
-    val err by m.error.collectAsStateWithLifecycle()
-    val sorted = remember(masters) { masters.values.sortedWith(compareBy({ it.typeValue }, { it.number })) }
-    Column(Modifier.fillMaxSize()) {
-        ModuleError(err)
-        if (sorted.isEmpty()) {
-            EmptyHint("Keine Master", "DMXControl hat keine Master gemeldet.")
-        } else {
-            val w = stripWidth()
-            LazyRow(
-                Modifier.fillMaxSize().padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp)
-            ) {
-                items(sorted, key = { it.masterId }) { ms -> MasterStrip(ms, w, s) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MasterStrip(ms: MasterDescriptor, w: androidx.compose.ui.unit.Dp, s: UmbraSession) {
-    val m = s.masters
-    val accent = if (ms.type == EMasterType.GRAND) Desk.Amber else if (ms.type == EMasterType.SPEED) Desk.Cyan else Color(0xFFB9A6F2)
-    ChannelStrip(ms.type.label(), ms.displayName.ifBlank { ms.name.ifBlank { "Master ${ms.number}" } }, accent, w) {
-        val value: Double? = when (ms.masterValueCase) {
-            MasterDescriptor.MasterValueCase.INTENSITY -> ms.intensity
-            MasterDescriptor.MasterValueCase.PARAMETER -> ms.parameter
-            else -> null
-        }
-        if (ms.type == EMasterType.SPEED) {
-            Text(
-                if (ms.masterValueCase == MasterDescriptor.MasterValueCase.SPEED) "%.2f×".format(ms.speed) else "–",
-                style = MaterialTheme.typography.titleMedium.merge(Numeric)
-            )
-            ExecButton("Lernen", false, accent) { p -> if (p) m.action(ms.masterId, MasterActionRequest.EAction.LEARN) }
-            ExecButton("Sync", false, accent) { p -> if (p) m.action(ms.masterId, MasterActionRequest.EAction.SYNC) }
-            ExecButton("Doppelt", false, accent) { p -> if (p) m.action(ms.masterId, MasterActionRequest.EAction.DOUBLE_TIMES) }
-            ExecButton("Halb", false, accent) { p -> if (p) m.action(ms.masterId, MasterActionRequest.EAction.HALF_TIMES) }
-        } else {
-            ExecButton("Voll", false, accent) { p -> if (p) m.action(ms.masterId, MasterActionRequest.EAction.FULL) }
-            ExecButton("Aus", false, accent) { p -> if (p) m.action(ms.masterId, MasterActionRequest.EAction.BLACK) }
-            if (value != null) {
-                Text(pct(value), style = MaterialTheme.typography.labelMedium.merge(Numeric))
-                VerticalFader(value.toFloat().coerceIn(0f, 1f), { v -> m.setFader(ms, v.toDouble()) }, accent, Modifier.fillMaxWidth().weight(1f))
-            }
-        }
-    }
 }
 
 // ============================================================== Macros
@@ -567,10 +516,13 @@ private fun MacroCard(mc: MacroDescriptor, s: UmbraSession) {
                 Text(f.label.ifBlank { "Fader ${f.number}" }, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(pct(if (drag) local.toDouble() else f.faderPosition), style = MaterialTheme.typography.labelMedium.merge(Numeric))
             }
-            Slider(
-                value = if (drag) local else f.faderPosition.toFloat().coerceIn(0f, 1f),
-                onValueChange = { v -> drag = true; local = v; m.setFader(mc.id, f.number, v.toDouble()) },
-                onValueChangeFinished = { drag = false }
+            DeskFader(
+                if (drag) local else f.faderPosition.toFloat().coerceIn(0f, 1f),
+                { v -> drag = true; local = v; m.setFader(mc.id, f.number, v.toDouble()) },
+                Desk.Cyan,
+                Modifier.fillMaxWidth().height(36.dp),
+                vertical = false,
+                onRelease = { drag = false }
             )
         }
         if (mc.buttonsCount == 0 && mc.fadersCount == 0) {
@@ -924,7 +876,7 @@ private fun AudioRow(p: PlayerThreadDescriptor, s: UmbraSession) {
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Lautstärke", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim, modifier = Modifier.width(80.dp))
-            Slider(vol.coerceIn(0f, 1f), { v -> vol = v; m.setVolume(p.id, v.toDouble()) }, Modifier.weight(1f))
+            DeskSlider(vol.coerceIn(0f, 1f), { v -> vol = v; m.setVolume(p.id, v.toDouble()) }, 0f..1f, Modifier.weight(1f), accent = Desk.Cyan)
         }
     }
 }

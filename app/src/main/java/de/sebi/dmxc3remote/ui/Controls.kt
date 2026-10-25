@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -32,65 +33,90 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /**
- * Vertikaler Fader mit relativer Bedienung: Berührung springt NICHT auf den
- * Touch-Punkt, sondern bewegt den Wert ab der aktuellen Position (bühnensicher).
+ * Einheitlicher Fader der App (Pult-Optik: Bahn, farbige Füllung, helle Kappe).
+ * Relative Bedienung: Berührung springt NICHT auf den Touch-Punkt, sondern bewegt den Wert ab der
+ * aktuellen Position (bühnensicher). Wert immer 0..1. Senkrecht oder waagerecht.
  */
 @Composable
-fun VerticalFader(
+fun DeskFader(
     value: Float,
     onChange: (Float) -> Unit,
     accent: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    vertical: Boolean = true,
+    enabled: Boolean = true,
+    onRelease: (() -> Unit)? = null
 ) {
     val currentValue by rememberUpdatedState(value)
     val currentOnChange by rememberUpdatedState(onChange)
+    val currentOnRelease by rememberUpdatedState(onRelease)
     var dragging by remember { mutableStateOf(false) }
     var local by remember { mutableFloatStateOf(value) }
-    val shown = if (dragging) local else value
+    val shown = (if (dragging) local else value).coerceIn(0f, 1f)
     val track = MaterialTheme.colorScheme.surfaceVariant
 
     Canvas(
-        modifier.pointerInput(Unit) {
-            detectVerticalDragGestures(
-                onDragStart = {
-                    local = currentValue
-                    dragging = true
-                },
-                onDragEnd = { dragging = false },
-                onDragCancel = { dragging = false }
-            ) { change, dragAmount ->
+        modifier.then(if (!enabled) Modifier else Modifier.pointerInput(vertical) {
+            val start: (Offset) -> Unit = { local = currentValue; dragging = true }
+            val end: () -> Unit = { dragging = false; currentOnRelease?.invoke() }
+            if (vertical) detectVerticalDragGestures(onDragStart = start, onDragEnd = end, onDragCancel = end) { change, d ->
                 change.consume()
                 val travel = (size.height - 24.dp.toPx()).coerceAtLeast(1f)
-                local = (local - dragAmount / travel).coerceIn(0f, 1f)
+                local = (local - d / travel).coerceIn(0f, 1f)
+                currentOnChange(local)
+            } else detectHorizontalDragGestures(onDragStart = start, onDragEnd = end, onDragCancel = end) { change, d ->
+                change.consume()
+                val travel = (size.width - 24.dp.toPx()).coerceAtLeast(1f)
+                local = (local + d / travel).coerceIn(0f, 1f)
                 currentOnChange(local)
             }
-        }
+        })
     ) {
-        val capH = 24.dp.toPx()
+        val cap = 24.dp.toPx()
         val trackW = 10.dp.toPx()
-        val travel = size.height - capH
-        val cx = size.width / 2f
-        drawRoundRect(
-            color = track,
-            topLeft = Offset(cx - trackW / 2, 0f),
-            size = Size(trackW, size.height),
-            cornerRadius = CornerRadius(trackW / 2)
-        )
-        val capTop = travel * (1f - shown)
-        drawRoundRect(
-            color = accent.copy(alpha = 0.55f),
-            topLeft = Offset(cx - trackW / 2, capTop + capH / 2),
-            size = Size(trackW, size.height - capTop - capH / 2),
-            cornerRadius = CornerRadius(trackW / 2)
-        )
-        drawRoundRect(
-            color = if (dragging) accent else Color(0xFFE0E0E0),
-            topLeft = Offset(4.dp.toPx(), capTop),
-            size = Size(size.width - 8.dp.toPx(), capH),
-            cornerRadius = CornerRadius(4.dp.toPx())
-        )
+        val capColor = if (dragging) accent else Color(0xFFE0E0E0)
+        if (vertical) {
+            val travel = size.height - cap
+            val cx = size.width / 2f
+            drawRoundRect(track, Offset(cx - trackW / 2, 0f), Size(trackW, size.height), CornerRadius(trackW / 2))
+            val capTop = travel * (1f - shown)
+            drawRoundRect(accent.copy(alpha = 0.55f), Offset(cx - trackW / 2, capTop + cap / 2), Size(trackW, size.height - capTop - cap / 2), CornerRadius(trackW / 2))
+            drawRoundRect(capColor, Offset(4.dp.toPx(), capTop), Size(size.width - 8.dp.toPx(), cap), CornerRadius(4.dp.toPx()))
+        } else {
+            val travel = size.width - cap
+            val cy = size.height / 2f
+            val capH = (size.height - 8.dp.toPx()).coerceAtMost(28.dp.toPx())
+            drawRoundRect(track, Offset(0f, cy - trackW / 2), Size(size.width, trackW), CornerRadius(trackW / 2))
+            val capLeft = travel * shown
+            drawRoundRect(accent.copy(alpha = 0.55f), Offset(0f, cy - trackW / 2), Size(capLeft + cap / 2, trackW), CornerRadius(trackW / 2))
+            drawRoundRect(capColor, Offset(capLeft, cy - capH / 2), Size(cap, capH), CornerRadius(4.dp.toPx()))
+        }
     }
 }
+
+/** Waagerechter Fader für beliebige Wertebereiche (z. B. Programmer, Effektparameter). */
+@Composable
+fun DeskSlider(
+    value: Float,
+    onChange: (Float) -> Unit,
+    range: ClosedFloatingPointRange<Float>,
+    modifier: Modifier = Modifier,
+    accent: Color = Desk.Amber
+) {
+    val span = (range.endInclusive - range.start).takeIf { it > 0f } ?: 1f
+    DeskFader(
+        ((value - range.start) / span).coerceIn(0f, 1f),
+        { onChange(range.start + it * span) },
+        accent,
+        modifier.height(36.dp),
+        vertical = false
+    )
+}
+
+/** Bisheriger Name, unverändert nutzbar. */
+@Composable
+fun VerticalFader(value: Float, onChange: (Float) -> Unit, accent: Color, modifier: Modifier = Modifier) =
+    DeskFader(value, onChange, accent, modifier, vertical = true)
 
 /** Momentary-Taste: Drücken sendet true, Loslassen false (wie Companion press/release). */
 @Composable

@@ -23,6 +23,7 @@ import LumosProtobuf.MainSwitchServiceTypes.MainSwitchSetRequest
 import LumosProtobuf.Master.MasterServiceCRUDTypes.MasterActionRequest
 import LumosProtobuf.Master.MasterServiceCRUDTypes.SetMasterValueRequest
 import LumosProtobuf.Master.MasterServiceTypes.MasterDescriptor
+import LumosProtobuf.Master.MasterServiceTypes.MasterButtonDescriptor
 import LumosProtobuf.Master.MasterServiceTypes.MasterFaderDescriptor
 import LumosProtobuf.Timecode.TimecodeServiceCRUDTypes.ETimecodeAction
 import LumosProtobuf.Timecode.TimecodeServiceCRUDTypes.TimecodeActionRequest
@@ -163,9 +164,11 @@ class MasterModule(s: UmbraSession) : Module(s, "Master") {
         else -> null
     }
 
-    private fun ways(master: MasterDescriptor): List<FaderWay> {
+    private fun ways(master: MasterDescriptor, preferred: String = "Master"): List<FaderWay> {
         val names = buildList {
+            master.fadersMap.forEach { (k, v) -> if (k.equals(preferred, true) || v.name.equals(preferred, true)) { add(v.name.ifBlank { k }); add(k) } }
             master.fadersMap.forEach { (k, v) -> add(k); if (v.name.isNotBlank()) add(v.name) }
+            add(preferred)
             add("")
         }.distinct()
         return names.map { FaderWay(it, false, "absolut \"$it\"") } + names.map { FaderWay(it, true, "increment \"$it\"") }
@@ -184,6 +187,38 @@ class MasterModule(s: UmbraSession) : Module(s, "Master") {
                 .build(),
             s.headers
         ).requireOk("SetMasterValue")
+    }
+
+    /**
+     * Weiterer Regler eines Masters über seinen Namen (Pan, Tilt, Hue …), Wert 0..1.
+     * UNVERIFIZIERT: Wertebereich der Nicht-Intensitäts-Regler.
+     */
+    fun setNamedFader(master: MasterDescriptor, name: String, value: Double) = s.throttler.submit("master:${master.masterId}:$name") {
+        stub.dl(3).setMasterValue(
+            SetMasterValueRequest.newBuilder()
+                .setRequestId(s.nextRequestId())
+                .setMasterId(master.masterId)
+                .setUserContextId(s.userContextId)
+                .setFader(MasterFaderDescriptor.newBuilder().setMasterId(master.masterId).setName(name).setAbsolut(value.coerceIn(0.0, 1.0)))
+                .build(),
+            s.headers
+        ).requireOk("SetMasterValue $name")
+    }
+
+    /**
+     * Taste eines Masters (Flash, Stomp, Select, Fix, Max, Zero, Red …) wie eine Hardware-Taste:
+     * Drücken = an, Loslassen = aus. DMXControl entscheidet, ob die Taste rastet.
+     */
+    fun button(master: MasterDescriptor, name: String, down: Boolean) = act("Master $name") {
+        stub.dl(3).setMasterValue(
+            SetMasterValueRequest.newBuilder()
+                .setRequestId(s.nextRequestId())
+                .setMasterId(master.masterId)
+                .setUserContextId(s.userContextId)
+                .setButton(MasterButtonDescriptor.newBuilder().setMasterId(master.masterId).setName(name).setButtonValue(down))
+                .build(),
+            s.headers
+        ).requireOk("Master $name")
     }
 
     fun setFader(master: MasterDescriptor, value: Double) = s.throttler.submit("master:${master.masterId}") {

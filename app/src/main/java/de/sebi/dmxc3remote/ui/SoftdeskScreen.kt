@@ -460,56 +460,24 @@ private fun SdFader(e: SdElement, fb: ObjectData?, color: Color, s: UmbraSession
     val span = (e.max - e.min).takeIf { it != 0.0 } ?: 1.0
     val fbPos = fb?.asDouble()?.let { ((it - e.min) / span).toFloat().coerceIn(0f, 1f) }
     val pos = if (dragging) local else fbPos ?: local
-    val cur by rememberUpdatedState(e)
-    val posNow by rememberUpdatedState(pos)
     val shape = RoundedCornerShape(10.dp)
     BoxWithConstraints(Modifier.fillMaxSize().clip(shape).background(Desk.Panel).border(1.dp, Desk.Line, shape)) {
         val vertical = maxHeight >= maxWidth
         val valueText = if (e.min == 0.0 && e.max == 1.0) "${(pos * 100).roundToInt()} %"
         else "%.1f".format(e.min + pos * span)
-        Canvas(
-            Modifier.fillMaxSize().then(
-                if (!enabled) Modifier else Modifier.pointerInput(e.id, vertical) {
-                    detectDragGestures(
-                        onDragStart = { local = posNow; dragging = true },
-                        onDragEnd = { dragging = false },
-                        onDragCancel = { dragging = false }
-                    ) { change, d ->
-                        change.consume()
-                        val travel = (if (vertical) size.height else size.width).toFloat().coerceAtLeast(1f)
-                        local = (local + (if (vertical) -d.y else d.x) / travel).coerceIn(0f, 1f)
-                        s.softdesk.fader(cur, local.toDouble())
-                    }
-                }
-            )
-        ) {
-            val track = 8.dp.toPx()
-            if (vertical) {
-                val cx = size.width / 2
-                drawRoundRect(Desk.Raised, Offset(cx - track / 2, 0f), Size(track, size.height), CornerRadius(track / 2))
-                val top = size.height * (1 - pos)
-                drawRoundRect(color.copy(alpha = 0.7f), Offset(cx - track / 2, top), Size(track, size.height - top), CornerRadius(track / 2))
-                val capH = 22.dp.toPx()
-                drawRoundRect(
-                    if (dragging) color else Desk.Text,
-                    Offset(6.dp.toPx(), (top - capH / 2).coerceIn(0f, size.height - capH)),
-                    Size(size.width - 12.dp.toPx(), capH),
-                    CornerRadius(4.dp.toPx())
-                )
-            } else {
-                val cy = size.height / 2
-                drawRoundRect(Desk.Raised, Offset(0f, cy - track / 2), Size(size.width, track), CornerRadius(track / 2))
-                val right = size.width * pos
-                drawRoundRect(color.copy(alpha = 0.7f), Offset(0f, cy - track / 2), Size(right, track), CornerRadius(track / 2))
-                val capW = 22.dp.toPx()
-                drawRoundRect(
-                    if (dragging) color else Desk.Text,
-                    Offset((right - capW / 2).coerceIn(0f, size.width - capW), 6.dp.toPx()),
-                    Size(capW, size.height - 12.dp.toPx()),
-                    CornerRadius(4.dp.toPx())
-                )
-            }
-        }
+        // derselbe Fader wie bei Executoren und Mastern
+        DeskFader(
+            pos,
+            { v -> dragging = true; local = v; s.softdesk.fader(e, v.toDouble()) },
+            color,
+            Modifier.fillMaxSize().padding(
+                start = if (vertical) 6.dp else 8.dp, end = if (vertical) 6.dp else 8.dp,
+                top = if (vertical) 40.dp else 26.dp, bottom = 6.dp
+            ),
+            vertical = vertical,
+            enabled = enabled,
+            onRelease = { dragging = false }
+        )
         Column(Modifier.align(Alignment.TopStart).padding(8.dp)) {
             Text(e.name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(valueText, style = MaterialTheme.typography.labelSmall.merge(Numeric), color = Desk.TextDim)

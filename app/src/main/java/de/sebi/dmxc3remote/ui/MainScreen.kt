@@ -161,7 +161,7 @@ private fun Content(dest: Dest, vm: AppViewModel, s: UmbraSession, order: List<D
         Dest.CUE -> CuelistScreen(s, vm)
         Dest.SOFT -> SoftdeskScreen(s, vm.softdesks, vm.midi)
         Dest.PROG -> ProgrammerScreen(s)
-        Dest.MASTER -> MasterScreen(s)
+        Dest.MASTER -> MasterScreen(s, vm)
         Dest.MACRO -> MacroScreen(s)
         Dest.MEDIA -> MediaScreen(s, vm)
         Dest.STAGE -> StageScreen(s)

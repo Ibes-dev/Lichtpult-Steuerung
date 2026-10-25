@@ -232,6 +232,7 @@ private fun ControlSettings(s: UmbraSession, vm: AppViewModel) {
     val last by vm.midi.last.collectAsStateWithLifecycle()
     val volume by vm.volumeKeysGo.collectAsStateWithLifecycle()
     val compactCl by vm.cuelistCompact.collectAsStateWithLifecycle()
+    val compactMs by vm.masterCompact.collectAsStateWithLifecycle()
     val goId by vm.goCuelistId.collectAsStateWithLifecycle()
     val cuelists by s.cuelists.items.collectAsStateWithLifecycle()
     Column(
@@ -245,6 +246,13 @@ private fun ControlSettings(s: UmbraSession, vm: AppViewModel) {
                     Text("Schlanke Zeilen statt Karten, sinnvoll bei vielen Cuelists", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
                 }
                 Switch(checked = compactCl, onCheckedChange = vm::setCuelistCompact)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Master kompakt anzeigen")
+                    Text("Nur Regler und Flash, mehr Master nebeneinander", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+                }
+                Switch(checked = compactMs, onCheckedChange = vm::setMasterCompact)
             }
         }
         Section("Externe Tasten") {

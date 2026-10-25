@@ -394,7 +394,7 @@ private fun SetupSlider(
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(104.dp))
-        Slider(value.coerceIn(range.start, range.endInclusive), onChange, Modifier.weight(1f).height(32.dp), valueRange = range)
+        DeskSlider(value.coerceIn(range.start, range.endInclusive), onChange, range, Modifier.weight(1f))
         Text(fmt.format(value * factor), style = MaterialTheme.typography.labelSmall.merge(Numeric), color = Desk.TextDim, modifier = Modifier.width(56.dp).padding(start = 6.dp))
     }
 }
