@@ -1,7 +1,7 @@
 package de.sebi.dmxc3remote.ui
 
 import LumosProtobuf.Master.MasterServiceTypes.EMasterType
-import LumosProtobuf.Master.MasterServiceTypes.MasterActionRequest
+import LumosProtobuf.Master.MasterServiceCRUDTypes.MasterActionRequest
 import LumosProtobuf.Master.MasterServiceTypes.MasterDescriptor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
