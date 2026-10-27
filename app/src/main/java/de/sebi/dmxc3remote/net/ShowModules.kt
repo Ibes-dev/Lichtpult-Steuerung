@@ -539,6 +539,16 @@ class CuelistModule(s: UmbraSession) : Module(s, "Cuelists") {
         action(id, CuelistActionRequest.EAction.LOAD, indexFor(indexMode ?: 0, pos, cue.cueIndex))
     }
 
+    /** Neue Cuelist anlegen, optional als Kopie einer bestehenden (CuelistClient.CreateCuelist). */
+    fun createCuelist(name: String, copyFrom: String? = null) = act("Cuelist anlegen") {
+        val b = LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistCreationRequest.newBuilder()
+            .setRequestId(s.nextRequestId()).setCuelistNameTemplate(name)
+        if (copyFrom != null) b.setCopyFromCuelist(copyFrom)
+        stub.dl(10).createCuelist(b.build(), s.headers).requireOk("Cuelist anlegen")
+        load()
+        s.emit(if (copyFrom != null) "Kopie \"$name\" angelegt" else "Cuelist \"$name\" angelegt")
+    }
+
     fun stopAll() = act("Alle Cuelists stoppen") {
         stub.dl(5).allCuelistAction(
             AllCuelistActionRequest.newBuilder().setRequestId(s.nextRequestId()).setAction(AllCuelistActionRequest.EAction.STOP).build(),

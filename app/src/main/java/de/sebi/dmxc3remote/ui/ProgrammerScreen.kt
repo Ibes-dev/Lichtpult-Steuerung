@@ -258,11 +258,12 @@ private fun PresetsTab(s: UmbraSession, blindLoad: Boolean, onBlind: (Boolean) -
                 ) {
                     Text(pr.name.ifBlank { "Preset" }, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        (if (pr.isPropertyPreset) "Eigenschafts-Preset" else "Universal-Preset") + " · ${pr.entriesCount} Einträge",
+                        (if (pr.isPropertyPreset) "Eigenschafts-Preset" else "Universal-Preset") +
+                            if (pr.entriesCount == 0) " · leer" else " · ${pr.entriesCount} Einträge",
                         style = MaterialTheme.typography.labelSmall, color = Desk.TextDim
                     )
                     Row(Modifier.horizontalScroll(rememberScrollState())) {
-                        TextButton(onClick = { s.presets.invoke(pr.presetId, null) }) { Text("Aufrufen") }
+                        TextButton(onClick = { s.presets.invoke(pr.presetId, null) }, enabled = pr.entriesCount > 0) { Text("Aufrufen") }
                         TextButton(onClick = { s.programmer.loadPreset(pr.presetId, pr.name, blindLoad) }) { Text("Bearbeiten") }
                         TextButton(onClick = { storeTo = pr.presetId to pr.name }, enabled = content.isNotEmpty()) { Text("Programmer übernehmen …") }
                     }
@@ -317,6 +318,7 @@ private fun CuesTab(s: UmbraSession, blindLoad: Boolean, onBlind: (Boolean) -> U
     val cl = listId?.let { lists[it] } ?: sorted.firstOrNull()
     var renameCue by remember { mutableStateOf<Pair<String, String>?>(null) }
     var renameList by remember { mutableStateOf(false) }
+    var newList by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             CompactSearch(q, { q = it }, "Cuelist suchen", Modifier.weight(1f))
@@ -343,6 +345,7 @@ private fun CuesTab(s: UmbraSession, blindLoad: Boolean, onBlind: (Boolean) -> U
                 modifier = Modifier.weight(1f)
             ) { Text("Als neuen Cue anhängen", maxLines = 1) }
             OutlinedButton(onClick = { renameList = true }) { Text("Umbenennen") }
+            OutlinedButton(onClick = { newList = true }) { Text("Neu") }
         }
         LazyColumn(
             Modifier.fillMaxSize(),
@@ -379,6 +382,7 @@ private fun CuesTab(s: UmbraSession, blindLoad: Boolean, onBlind: (Boolean) -> U
         }
     }
     val clNow = cl
+    if (newList) NewCuelistDialog(clNow?.let { it.id to it.name }, { name, copy -> s.cuelists.createCuelist(name, copy); newList = false }) { newList = false }
     if (renameList && clNow != null) RenameDialog("Cuelist umbenennen", clNow.name, { s.cuelists.renameCuelist(clNow.id, it); renameList = false }) { renameList = false }
     renameCue?.let { (id, name) ->
         if (clNow != null) RenameDialog("Cue umbenennen", name, { s.cuelists.renameCue(clNow.id, id, it); renameCue = null }) { renameCue = null }

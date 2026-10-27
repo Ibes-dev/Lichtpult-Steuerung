@@ -38,6 +38,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
@@ -193,6 +195,7 @@ fun CuelistScreen(s: UmbraSession, vm: AppViewModel) {
     val m = s.cuelists
     val goId by vm.goCuelistId.collectAsStateWithLifecycle()
     var detailId by rememberSaveable { mutableStateOf<String?>(null) }
+    var newList by remember { mutableStateOf(false) }
     val lists by m.items.collectAsStateWithLifecycle()
     val groups by m.groups.collectAsStateWithLifecycle()
     val err by m.error.collectAsStateWithLifecycle()
@@ -220,6 +223,9 @@ fun CuelistScreen(s: UmbraSession, vm: AppViewModel) {
                 items(groups.values.sortedBy { it.number }, key = { it.id }) { g ->
                     FilterChip(selected = group == g.id, onClick = { group = g.id }, label = { Text(g.name, maxLines = 1) })
                 }
+            }
+            androidx.compose.material3.IconButton(onClick = { newList = true }) {
+                Icon(Icons.Filled.Add, contentDescription = "Neue Cuelist", tint = Desk.Amber)
             }
             OutlinedButton(onClick = m::stopAll, modifier = Modifier.padding(end = 10.dp)) { Text("Alle stoppen") }
         }
@@ -270,6 +276,7 @@ fun CuelistScreen(s: UmbraSession, vm: AppViewModel) {
     }
     val det = detailId?.let { lists[it] }
     if (det != null) CuelistDetail(det, s) { detailId = null }
+    if (newList) NewCuelistDialog(null, { name, copy -> m.createCuelist(name, copy); newList = false }) { newList = false }
 }
 
 /** Kompakte Zeile (ca. 52 dp hoch) statt Karte. */
@@ -313,6 +320,7 @@ private fun CuelistDetail(cl: CuelistDescriptor, s: UmbraSession, onClose: () ->
     val progress by s.cuelists.progress.collectAsStateWithLifecycle()
     val p = progress[cl.id]
     var renameList by remember { mutableStateOf(false) }
+    var copyList by remember { mutableStateOf(false) }
     var renameCue by remember { mutableStateOf<Pair<String, String>?>(null) }   // cueId to Name
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onClose,
@@ -321,6 +329,9 @@ private fun CuelistDetail(cl: CuelistDescriptor, s: UmbraSession, onClose: () ->
                 Text(cl.name.ifBlank { "Cuelist ${cl.number}" }, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 androidx.compose.material3.IconButton(onClick = { renameList = true }) {
                     Icon(Icons.Filled.Edit, contentDescription = "Cuelist umbenennen", tint = Desk.TextDim)
+                }
+                androidx.compose.material3.IconButton(onClick = { copyList = true }) {
+                    Icon(Icons.Filled.ContentCopy, contentDescription = "Cuelist kopieren", tint = Desk.TextDim)
                 }
             }
         },
@@ -371,6 +382,7 @@ private fun CuelistDetail(cl: CuelistDescriptor, s: UmbraSession, onClose: () ->
         }
     )
     if (renameList) RenameDialog("Cuelist umbenennen", cl.name, { s.cuelists.renameCuelist(cl.id, it); renameList = false }) { renameList = false }
+    if (copyList) NewCuelistDialog(cl.id to cl.name, { name, copy -> s.cuelists.createCuelist(name, copy); copyList = false }, initialCopy = true) { copyList = false }
     renameCue?.let { (id, name) ->
         RenameDialog("Cue umbenennen", name, { s.cuelists.renameCue(cl.id, id, it); renameCue = null }) { renameCue = null }
     }

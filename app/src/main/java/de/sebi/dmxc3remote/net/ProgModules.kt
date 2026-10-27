@@ -305,6 +305,9 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
 
     @Volatile private var selectedGroup: String? = null
 
+    /** Zuletzt im Programmer gewählte Gerätegruppe (Ziel für Eigenschafts-Presets). */
+    val currentGroupId: String? get() = selectedGroup
+
     /**
      * Gruppe, die DMXControl für die aktuelle Auswahl im UserContext führt (selectedDeviceGroup).
      * Bei Auswahl einzelner Geräte ist das vermutlich eine temporäre Gruppe (UNVERIFIZIERT);
@@ -704,13 +707,27 @@ class PresetModule(s: UmbraSession) : Module(s, "Presets") {
     }
 
     /** Preset aufrufen; mit Gruppe gezielt, ohne Gruppe auf alle enthaltenen Geräte (forceInvokeAll). */
+    /**
+     * Preset aufrufen. Universal-Presets wirken auf ihre eigenen Geräte (forceInvokeAll), Eigenschafts-
+     * Presets brauchen ein Ziel: die übergebene oder zuletzt gewählte Gerätegruppe. Leere Presets und
+     * Eigenschafts-Presets ohne Ziel werden gar nicht erst gesendet – DMXControl lehnt sie ohne Begründung ab.
+     */
     fun invoke(presetId: String, groupId: String?) = act("Preset") {
+        val p = _items.value[presetId]
+        val name = p?.name?.ifBlank { null } ?: "Preset"
+        if (p != null && p.entriesCount == 0) throw UmbraException("\"$name\" ist leer – zuerst Werte mit „Programmer übernehmen“ speichern")
+        val target = groupId ?: s.devices.currentGroupId
+        if (p?.isPropertyPreset == true && target == null) throw UmbraException("\"$name\" ist ein Eigenschafts-Preset – zuerst unter „Werte“ eine Gerätegruppe wählen")
         val b = InvokePresetRequest.newBuilder()
             .setRequestId(s.nextRequestId())
             .setUserContextId(s.userContextId)
             .setPresetId(presetId)
-        if (groupId != null) b.setDeviceGroupId(groupId) else b.setForceInvokeAll(true)
-        stub.dl(5).invokePreset(b.build(), s.headers).requireOk("InvokePreset")
+        if (p?.isPropertyPreset == true && target != null) b.setDeviceGroupId(target)
+        else if (groupId != null) b.setDeviceGroupId(groupId)
+        else b.setForceInvokeAll(true)
+        val r = stub.dl(5).invokePreset(b.build(), s.headers)
+        if (!r.ok) throw UmbraException("\"$name\" wurde von DMXControl abgelehnt" + (r.message.text().takeIf { it.isNotBlank() }?.let { ": $it" } ?: ""))
+        s.emit("\"$name\" aufgerufen")
     }
 }
 
