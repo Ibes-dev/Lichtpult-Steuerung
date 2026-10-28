@@ -17,11 +17,18 @@ data class Rig3D(
     /** true = hängend (strahlt nach unten), false = stehend (strahlt nach oben). */
     val hanging: Boolean = true,
     /** Abstrahlwinkel, wenn das Gerät keinen Zoom meldet. */
-    val beam: Float = 25f
+    val beam: Float = 25f,
+    /** Tiefe hinter der Bühnenvorderkante in Metern (nur bei StageView als Frontansicht). */
+    val depth: Float = 0f
 )
 
 /** Einstellungen einer Ansicht: welche StageView, wie breit die Bühne in Metern ist. */
-data class View3D(val stageViewId: String? = null, val widthM: Float = 10f)
+data class View3D(
+    val stageViewId: String? = null,
+    val widthM: Float = 10f,
+    /** true = StageView ist von vorn gezeichnet (oben = hoch), false = von oben (oben = hinten). */
+    val front: Boolean = false
+)
 
 /** Speichert Höhe/Ausrichtung je Gerät und die gewählte StageView (SharedPreferences, JSON). */
 class Stage3DStore(context: Context) {
@@ -39,12 +46,12 @@ class Stage3DStore(context: Context) {
             val r = o.getJSONObject(k)
             Rig3D(
                 r.optDouble("h", 4.0).toFloat(), r.optDouble("yaw", 0.0).toFloat(), r.optDouble("tilt", 30.0).toFloat(),
-                r.optBoolean("hang", true), r.optDouble("beam", 25.0).toFloat()
+                r.optBoolean("hang", true), r.optDouble("beam", 25.0).toFloat(), r.optDouble("depth", 0.0).toFloat()
             )
         }
     }.getOrDefault(emptyMap())
 
-    private fun loadView() = View3D(sp.getString("view", null), sp.getFloat("widthM", 10f))
+    private fun loadView() = View3D(sp.getString("view", null), sp.getFloat("widthM", 10f), sp.getBoolean("front", false))
 
     fun rig(id: String) = _rigs.value[id] ?: Rig3D()
 
@@ -56,14 +63,14 @@ class Stage3DStore(context: Context) {
         val o = JSONObject()
         m.forEach { (k, r) ->
             o.put(k, JSONObject().put("h", r.height.toDouble()).put("yaw", r.yaw.toDouble()).put("tilt", r.tilt.toDouble())
-                .put("hang", r.hanging).put("beam", r.beam.toDouble()))
+                .put("hang", r.hanging).put("beam", r.beam.toDouble()).put("depth", r.depth.toDouble()))
         }
         sp.edit().putString("rigs", o.toString()).apply()
         _rigs.value = m
     }
 
     fun setView(v: View3D) {
-        sp.edit().putString("view", v.stageViewId).putFloat("widthM", v.widthM).apply()
+        sp.edit().putString("view", v.stageViewId).putFloat("widthM", v.widthM).putBoolean("front", v.front).apply()
         _view.value = v
     }
 }

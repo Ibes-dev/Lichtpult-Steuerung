@@ -712,22 +712,40 @@ class PresetModule(s: UmbraSession) : Module(s, "Presets") {
      * Presets brauchen ein Ziel: die übergebene oder zuletzt gewählte Gerätegruppe. Leere Presets und
      * Eigenschafts-Presets ohne Ziel werden gar nicht erst gesendet – DMXControl lehnt sie ohne Begründung ab.
      */
+    /** Welche Aufruf-Variante DMXControl annimmt, je Preset-Art (true = Eigenschaft). */
+    private val invokeMode = HashMap<Boolean, Int>()
+
     fun invoke(presetId: String, groupId: String?) = act("Preset") {
         val p = _items.value[presetId]
         val name = p?.name?.ifBlank { null } ?: "Preset"
         val target = groupId ?: s.devices.currentGroupId
-        if (p?.isPropertyPreset == true && target == null) throw UmbraException("\"$name\" ist ein Eigenschafts-Preset – zuerst unter „Werte“ eine Gerätegruppe wählen")
-        val b = InvokePresetRequest.newBuilder()
-            .setRequestId(s.nextRequestId())
-            .setUserContextId(s.userContextId)
-            .setPresetId(presetId)
-        if (p?.isPropertyPreset == true && target != null) b.setDeviceGroupId(target)
-        else if (groupId != null) b.setDeviceGroupId(groupId)
-        else b.setForceInvokeAll(true)
-        val r = stub.dl(5).invokePreset(b.build(), s.headers)
-        if (!r.ok) throw UmbraException("\"$name\" wurde von DMXControl abgelehnt" + (r.message.text().takeIf { it.isNotBlank() }?.let { ": $it" } ?: ""))
-        s.emit("\"$name\" aufgerufen")
+        val property = p?.isPropertyPreset == true
+        if (property && target == null) throw UmbraException("\"$name\" ist ein Eigenschafts-Preset – zuerst unter „Werte“ eine Gerätegruppe wählen")
+        // Varianten: 0 = auf alle eigenen Geräte (forceInvokeAll), 1 = ohne Ziel, 2 = auf gewählte Gruppe
+        val variants = buildList {
+            if (!property) { add(0); add(1) }
+            if (target != null) add(2)
+        }
+        val ordered = invokeMode[property]?.let { m -> variants.sortedBy { if (it == m) 0 else 1 } } ?: variants
+        var last = ""
+        for (v in ordered) {
+            val b = InvokePresetRequest.newBuilder()
+                .setRequestId(s.nextRequestId())
+                .setUserContextId(s.userContextId)
+                .setPresetId(presetId)
+            when (v) {
+                0 -> b.setForceInvokeAll(true)
+                2 -> b.setDeviceGroupId(target!!)
+            }
+            val r = stub.dl(5).invokePreset(b.build(), s.headers)
+            if (r.ok) { invokeMode[property] = v; s.emit("\"$name\" aufgerufen"); return@act }
+            last = r.message.text()
+            Diag.note("Preset aufrufen \"$name\" Variante $v abgelehnt: $last")
+        }
+        throw UmbraException("\"$name\" wurde von DMXControl abgelehnt" + (last.takeIf { it.isNotBlank() }?.let { ": $it" } ?: "") +
+            if (target == null) " – evtl. zuerst unter „Werte“ eine Gerätegruppe wählen" else "")
     }
+
 }
 
 /**

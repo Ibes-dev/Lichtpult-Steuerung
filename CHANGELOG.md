@@ -5,10 +5,14 @@
 - Speed-Master mit Tipp-Fläche (Learn), Sync, ×2, ½; Position-Master mit XY-Feld; Farb-Master mit Farbfeld, Farbton-Regler und Farbchips
 - Einstellung "Master kompakt anzeigen" unter System → Steuerung
 - Neue Cuelists anlegen und kopieren (Programmer → Cues: Neu)
+- Programmer → Cues: Reihenfolge ändern (Pfeile) und Cues löschen
+- 3D-Bühne: StageView wahlweise als Draufsicht oder Frontansicht (System → Steuerung), bei Frontansicht Tiefe je Gerät
 - Programmer speichern: neu "In Cuelist" – als neuen Cue an eine Cuelist anhängen oder neue Cuelist mit erstem Cue anlegen
 
 ## Behoben
 - Speichern in Cues und Presets übernahm den Programmer-Inhalt nicht (Cues/Presets blieben leer); jetzt mit Auswahl des Programmer-Inhalts und Erfolgskontrolle
+- Cue und Cuelist umbenennen griff nicht; jetzt mit Erfolgskontrolle
+- Preset aufrufen wurde abgelehnt; die App probiert nun die Aufruf-Varianten und merkt sich die passende
 - Presets: Eigenschafts-Presets wirken auf die zuletzt gewählte Gerätegruppe; verständliche Meldungen statt "InvokePreset: abgelehnt"
 
 ## Geändert

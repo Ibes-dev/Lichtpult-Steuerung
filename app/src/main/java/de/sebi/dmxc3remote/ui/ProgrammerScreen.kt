@@ -28,6 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Undo
@@ -319,6 +321,7 @@ private fun CuesTab(s: UmbraSession, blindLoad: Boolean, onBlind: (Boolean) -> U
     var renameCue by remember { mutableStateOf<Pair<String, String>?>(null) }
     var renameList by remember { mutableStateOf(false) }
     var newList by remember { mutableStateOf(false) }
+    var deleteCue by remember { mutableStateOf<Triple<String, String, String>?>(null) }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             CompactSearch(q, { q = it }, "Cuelist suchen", Modifier.weight(1f))
@@ -364,10 +367,18 @@ private fun CuesTab(s: UmbraSession, blindLoad: Boolean, onBlind: (Boolean) -> U
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(nr, style = MaterialTheme.typography.labelLarge.merge(Numeric), modifier = Modifier.width(44.dp))
                         Text(c.name.ifBlank { "Cue $nr" }, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        // Reihenfolge ändern
+                        IconButton(onClick = { s.cuelists.moveCue(cl.id, c.cueId, pos - 1) }, enabled = pos > 0, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "nach oben", tint = if (pos > 0) Desk.TextDim else Desk.Line)
+                        }
+                        IconButton(onClick = { s.cuelists.moveCue(cl.id, c.cueId, pos + 1) }, enabled = pos < cues.lastIndex, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "nach unten", tint = if (pos < cues.lastIndex) Desk.TextDim else Desk.Line)
+                        }
                     }
                     Row(Modifier.horizontalScroll(rememberScrollState())) {
                         TextButton(onClick = { s.programmer.loadCue(cl.id, c.cueId, "$label (${cl.name})", blindLoad) }) { Text("Bearbeiten") }
                         TextButton(onClick = { renameCue = c.cueId to c.name }) { Text("Umbenennen") }
+                        TextButton(onClick = { deleteCue = Triple(c.cueId, label, cl.id) }) { Text("Löschen", color = Desk.Red) }
                         TextButton(
                             onClick = { s.programmer.storeToCue(cl.id, CueAddFromProgrammerRequest.EAddType.REPLACE, s.cuelists.indexOf(cl.id, pos), "$label ersetzt") },
                             enabled = content.isNotEmpty()
@@ -382,6 +393,15 @@ private fun CuesTab(s: UmbraSession, blindLoad: Boolean, onBlind: (Boolean) -> U
         }
     }
     val clNow = cl
+    deleteCue?.let { (id, label, listId) ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { deleteCue = null },
+            title = { Text("$label löschen?") },
+            text = { Text("Der Cue wird in DMXControl gelöscht.") },
+            confirmButton = { TextButton(onClick = { s.cuelists.deleteCue(listId, id, label); deleteCue = null }) { Text("Löschen", color = Desk.Red) } },
+            dismissButton = { TextButton(onClick = { deleteCue = null }) { Text("Abbrechen") } }
+        )
+    }
     if (newList) NewCuelistDialog(clNow?.let { it.id to it.name }, { name, copy -> s.cuelists.createCuelist(name, copy); newList = false }) { newList = false }
     if (renameList && clNow != null) RenameDialog("Cuelist umbenennen", clNow.name, { s.cuelists.renameCuelist(clNow.id, it); renameList = false }) { renameList = false }
     renameCue?.let { (id, name) ->

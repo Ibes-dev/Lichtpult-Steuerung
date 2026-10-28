@@ -458,19 +458,79 @@ class CuelistModule(s: UmbraSession) : Module(s, "Cuelists") {
         else -> cueIndex
     }
 
+    // ================================================================ Cues bearbeiten
+    private val cueStub by lazy { LumosProtobufClient.CueClientGrpcKt.CueClientCoroutineStub(s.channel) }
+
+    /**
+     * "parentContainerId" ist nicht dokumentiert: Cue-eigener Wert, Cuelist-ID oder leer. Die App
+     * probiert der Reihe nach, prüft das Ergebnis an der neu geladenen Cuelist und merkt sich,
+     * was wirkt.
+     */
+    @Volatile private var containerMode: Int? = null
+
+    private fun containers(cuelistId: String, cueId: String): List<Pair<Int, String>> {
+        val cue = _items.value[cuelistId]?.cuesList?.firstOrNull { it.cueId == cueId }
+        val all = listOf(0 to (cue?.parentContainerId ?: ""), 1 to cuelistId, 2 to "")
+            .filter { it.first != 0 || it.second.isNotBlank() }.distinctBy { it.second }
+        return containerMode?.let { m -> all.sortedBy { if (it.first == m) 0 else 1 } } ?: all
+    }
+
+    private suspend fun cueOp(
+        what: String, cuelistId: String, cueId: String,
+        send: suspend (container: String) -> LumosProtobuf.CommonTypes.ConfirmedResponse,
+        check: (LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistDescriptor?) -> Boolean
+    ) {
+        var last = ""
+        for ((mode, container) in containers(cuelistId, cueId)) {
+            val r = runCatching { send(container) }.getOrNull()
+            if (r == null || !r.ok) { last = r?.message?.text().orEmpty(); Diag.note("$what (Container $mode): abgelehnt $last"); continue }
+            delay(250)
+            runCatching { load() }
+            if (check(_items.value[cuelistId])) { containerMode = mode; return }
+            Diag.note("$what (Container $mode): angenommen, aber ohne Wirkung")
+        }
+        throw UmbraException("$what: DMXControl hat es nicht übernommen" + (last.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""))
+    }
+
     /** Cue umbenennen (CueClient.SetCueValue, Feld name). */
     fun renameCue(cuelistId: String, cueId: String, name: String) = act("Cue umbenennen") {
-        val cue = _items.value[cuelistId]?.cuesList?.firstOrNull { it.cueId == cueId }
-        LumosProtobufClient.CueClientGrpcKt.CueClientCoroutineStub(s.channel).dl(5).setCueValue(
-            LumosProtobuf.Cue.CueServiceTypes.SetCueValueRequest.newBuilder()
-                .setRequestId(s.nextRequestId())
-                .setCueId(cueId)
-                .setParentContainerId(cue?.parentContainerId?.ifBlank { null } ?: cuelistId)
-                .setName(name)
-                .build(),
-            s.headers
-        ).requireOk("Cue umbenennen")
+        cueOp("Cue umbenennen", cuelistId, cueId,
+            { c ->
+                cueStub.dl(5).setCueValue(
+                    LumosProtobuf.Cue.CueServiceTypes.SetCueValueRequest.newBuilder()
+                        .setRequestId(s.nextRequestId()).setCueId(cueId).setParentContainerId(c).setName(name).build(),
+                    s.headers
+                )
+            },
+            { cl -> cl?.cuesList?.firstOrNull { it.cueId == cueId }?.name == name })
         s.emit("Cue umbenannt in \"$name\"")
+    }
+
+    /** Cue löschen (CueClient.DeleteCue). */
+    fun deleteCue(cuelistId: String, cueId: String, label: String) = act("Cue löschen") {
+        cueOp("Cue löschen", cuelistId, cueId,
+            { c ->
+                cueStub.dl(5).deleteCue(
+                    LumosProtobuf.Cue.CueServiceTypes.CueDeletionRequest.newBuilder()
+                        .setRequestId(s.nextRequestId()).setParentContainerId(c).setCueId(cueId).build(),
+                    s.headers
+                )
+            },
+            { cl -> cl != null && cl.cuesList.none { it.cueId == cueId } })
+        s.emit("$label gelöscht")
+    }
+
+    /** Cue an eine andere Position schieben (CueClient.MoveCue, Ziel = Position in der Liste). */
+    fun moveCue(cuelistId: String, cueId: String, targetPos: Int) = act("Cue verschieben") {
+        cueOp("Cue verschieben", cuelistId, cueId,
+            { c ->
+                cueStub.dl(5).moveCue(
+                    LumosProtobuf.Cue.CueServiceTypes.CueMoveRequest.newBuilder()
+                        .setRequestId(s.nextRequestId()).setParentContainerId(c).setCueId(cueId).setTargetIndex(targetPos).build(),
+                    s.headers
+                )
+            },
+            { cl -> cl?.cuesList?.sortedBy { it.cueIndex }?.indexOfFirst { it.cueId == cueId } == targetPos })
     }
 
     /**
@@ -493,6 +553,9 @@ class CuelistModule(s: UmbraSession) : Module(s, "Cuelists") {
                 .setValue(LumosProtobuf.CommonTypes.ObjectData.newBuilder().setStringValue(name)).build(),
             s.headers
         ).requireOk("Cuelist umbenennen")
+        delay(250)
+        runCatching { load() }
+        if (_items.value[cuelistId]?.name != name) throw UmbraException("Cuelist umbenennen: DMXControl hat den Namen nicht übernommen")
         s.emit("Cuelist umbenannt in \"$name\"")
     }
 

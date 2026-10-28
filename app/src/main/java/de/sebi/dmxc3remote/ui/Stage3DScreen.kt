@@ -134,7 +134,7 @@ fun Stage3DScreen(s: UmbraSession, store: Stage3DStore) {
     DisposableEffect(Unit) { onDispose { s.stage.setLiveDevices(emptyList()) } }
 
     // Geräte der StageView in Meter umrechnen: Breite der Ansicht = eingestellte Bühnenbreite
-    val fixtures = remember(view, devices, rigs, cfg.widthM) {
+    val fixtures = remember(view, devices, rigs, cfg.widthM, cfg.front) {
         val list = view?.devicesList ?: emptyList()
         if (list.isEmpty()) return@remember emptyList<Fixture>()
         val minX = list.minOf { it.position.x }; val maxX = list.maxOf { it.position.x + it.size.width }
@@ -145,9 +145,17 @@ fun Stage3DScreen(s: UmbraSession, store: Stage3DStore) {
             val dev = devices[d.deviceId]
             val rig = rigs[d.deviceId] ?: Rig3D()
             val px = (d.position.x + d.size.width / 2 - cx) * scale
-            val py = (d.position.y + d.size.height / 2 - cy) * scale
             val moving = dev?.beamsList?.flatMap { it.propertiesList }?.any { it.kind() == de.sebi.dmxc3remote.net.PropKind.POSITION } == true
-            Fixture(d.deviceId, dev?.number?.toString() ?: "?", V3(px, py, if (rig.hanging) rig.height else 0.3f), rig, moving)
+            val pos = if (cfg.front) {
+                // Frontansicht: oben in der StageView = hoch; Tiefe aus der Einrichtung
+                val pz = (maxY - (d.position.y + d.size.height / 2)) * scale + 0.3f
+                V3(px, -rig.depth, pz)
+            } else {
+                // Draufsicht: oben in der StageView = hinten; Höhe aus der Einrichtung
+                val py = (d.position.y + d.size.height / 2 - cy) * scale
+                V3(px, py, if (rig.hanging) rig.height else 0.3f)
+            }
+            Fixture(d.deviceId, dev?.number?.toString() ?: "?", pos, rig, moving)
         }
     }
 
@@ -349,7 +357,7 @@ private fun SetupPanel(
                 SetupSlider("Dunst", haze, 0f..1f, "%.0f %%", factor = 100f, onChange = onHaze)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Alle:", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim, modifier = Modifier.align(Alignment.CenterVertically))
-                    listOf(3f, 4f, 5f, 6f).forEach { h ->
+                    if (!cfg.front) listOf(3f, 4f, 5f, 6f).forEach { h ->
                         SmallChip("${h.toInt()} m", false, { store.setRigs(fixtures.map { it.id }) { r -> r.copy(height = h) } })
                     }
                     SmallChip("hängend", false, { store.setRigs(fixtures.map { it.id }) { r -> r.copy(hanging = true) } })
@@ -367,13 +375,15 @@ private fun SetupPanel(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(f.label, style = MaterialTheme.typography.labelLarge.merge(Numeric), modifier = Modifier.width(40.dp))
                     Text(
-                        "%.1f m · %.0f° · %s".format(r.height, r.yaw, if (r.hanging) "hängend" else "stehend") +
+                        (if (cfg.front) "Tiefe %.1f m".format(r.depth) else "%.1f m".format(r.height)) +
+                            " · %.0f° · %s".format(r.yaw, if (r.hanging) "hängend" else "stehend") +
                             if (!f.moving) " · Neigung %.0f°".format(r.tilt) else " · Moving Head",
                         style = MaterialTheme.typography.bodySmall, color = Desk.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                 }
                 if (open) {
-                    SetupSlider("Höhe", r.height, 0.5f..12f, "%.1f m") { store.setRig(f.id, r.copy(height = it)) }
+                    if (cfg.front) SetupSlider("Tiefe", r.depth, 0f..15f, "%.1f m") { store.setRig(f.id, r.copy(depth = it)) }
+                    else SetupSlider("Höhe", r.height, 0.5f..12f, "%.1f m") { store.setRig(f.id, r.copy(height = it)) }
                     SetupSlider("Ausrichtung", r.yaw, -180f..180f, "%.0f°") { store.setRig(f.id, r.copy(yaw = it)) }
                     if (!f.moving) SetupSlider("Neigung", r.tilt, 0f..90f, "%.0f°") { store.setRig(f.id, r.copy(tilt = it)) }
                     SetupSlider("Abstrahlwinkel", r.beam, 3f..60f, "%.0f°") { store.setRig(f.id, r.copy(beam = it)) }
