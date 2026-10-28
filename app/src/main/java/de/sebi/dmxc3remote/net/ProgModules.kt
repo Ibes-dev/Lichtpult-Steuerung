@@ -715,7 +715,6 @@ class PresetModule(s: UmbraSession) : Module(s, "Presets") {
     fun invoke(presetId: String, groupId: String?) = act("Preset") {
         val p = _items.value[presetId]
         val name = p?.name?.ifBlank { null } ?: "Preset"
-        if (p != null && p.entriesCount == 0) throw UmbraException("\"$name\" ist leer – zuerst Werte mit „Programmer übernehmen“ speichern")
         val target = groupId ?: s.devices.currentGroupId
         if (p?.isPropertyPreset == true && target == null) throw UmbraException("\"$name\" ist ein Eigenschafts-Preset – zuerst unter „Werte“ eine Gerätegruppe wählen")
         val b = InvokePresetRequest.newBuilder()

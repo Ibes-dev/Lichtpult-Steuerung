@@ -4,10 +4,12 @@
 - Master-Controller wie in DMXControl: Abschnitte Grand, Gruppen, Parameter, Speed, Position, Farbe; Regler und Tasten (Flash, Stomp, Select, Fix …) aus den Daten von DMXControl, aktive Tasten leuchten
 - Speed-Master mit Tipp-Fläche (Learn), Sync, ×2, ½; Position-Master mit XY-Feld; Farb-Master mit Farbfeld, Farbton-Regler und Farbchips
 - Einstellung "Master kompakt anzeigen" unter System → Steuerung
-- Neue Cuelists anlegen (Cuelists: +, Programmer → Cues: Neu) und bestehende kopieren (Cue-Liste: Kopieren-Symbol)
+- Neue Cuelists anlegen und kopieren (Programmer → Cues: Neu)
+- Programmer speichern: neu "In Cuelist" – als neuen Cue an eine Cuelist anhängen oder neue Cuelist mit erstem Cue anlegen
 
 ## Behoben
-- Presets: leere Presets lassen sich nicht mehr "aufrufen"; Eigenschafts-Presets wirken auf die zuletzt gewählte Gerätegruppe; verständliche Meldungen statt "InvokePreset: abgelehnt"
+- Speichern in Cues und Presets übernahm den Programmer-Inhalt nicht (Cues/Presets blieben leer); jetzt mit Auswahl des Programmer-Inhalts und Erfolgskontrolle
+- Presets: Eigenschafts-Presets wirken auf die zuletzt gewählte Gerätegruppe; verständliche Meldungen statt "InvokePreset: abgelehnt"
 
 ## Geändert
 - Einheitliche Fader in der ganzen App (Executoren, Master, Bedienfeld, Programmer, Effekte, Cuelist-Intensität, Audio, 3D-Einrichtung)
