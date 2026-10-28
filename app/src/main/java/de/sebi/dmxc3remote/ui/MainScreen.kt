@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Theaters
 import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material.icons.filled.Code
@@ -78,6 +79,7 @@ enum class Dest(val label: String, val icon: ImageVector) {
     MEDIA("Beat & Medien", Icons.Filled.MusicNote),
     STAGE("Bühne", Icons.Filled.Theaters),
     STAGE3D("3D-Bühne", Icons.Filled.ViewInAr),
+    INPUT("Zuweisung", Icons.Filled.AccountTree),
     DEVICES("Geräte", Icons.Filled.Lightbulb),
     CONSOLE("Befehle", Icons.Filled.Code),
     SYSTEM("System", Icons.Filled.Settings),
@@ -166,6 +168,7 @@ private fun Content(dest: Dest, vm: AppViewModel, s: UmbraSession, order: List<D
         Dest.MEDIA -> MediaScreen(s, vm)
         Dest.STAGE -> StageScreen(s)
         Dest.STAGE3D -> Stage3DScreen(s, vm.stage3d)
+        Dest.INPUT -> InputScreen(s)
         Dest.DEVICES -> DevicesScreen(s)
         Dest.CONSOLE -> ConsoleScreen(s)
         Dest.SYSTEM -> SystemScreen(s, vm)

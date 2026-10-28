@@ -1,6 +1,7 @@
 # Lichtpult Remote 1.2.0
 
 ## Neu
+- Eingangszuweisung: Bänke, Verbindungs-Sets mit Miniatur, Übersicht als echter Graph (Positionen aus DMXControl, zoomen/verschieben, Live-Werte), Fokus je Baustein mit Nachbarn und Kabeln, Verbinden über Auswahlliste, Lösen, Bausteine/Ein-/Ausgänge hinzufügen und entfernen, Sets anlegen und löschen
 - Master-Controller wie in DMXControl: Abschnitte Grand, Gruppen, Parameter, Speed, Position, Farbe; Regler und Tasten (Flash, Stomp, Select, Fix …) aus den Daten von DMXControl, aktive Tasten leuchten
 - Speed-Master mit Tipp-Fläche (Learn), Sync, ×2, ½; Position-Master mit XY-Feld; Farb-Master mit Farbfeld, Farbton-Regler und Farbchips
 - Einstellung "Master kompakt anzeigen" unter System → Steuerung
