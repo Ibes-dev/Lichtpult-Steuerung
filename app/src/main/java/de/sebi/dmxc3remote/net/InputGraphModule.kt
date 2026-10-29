@@ -119,8 +119,11 @@ class InputGraphModule(s: UmbraSession) : Module(s, "Eingangszuweisung") {
     suspend fun reloadSet(id: String) = runCatching { reloadSets(listOf(id)) }
 
     override suspend fun stream() = coroutineScope {
-        launch { runCatching { stub.receiveBankChanges(s.getRequest(), s.headers).collect { runCatching { _banks.value = stub.dl(10).getBanks(s.getMultiple(), s.headers).banksList.sortedBy { b -> b.number } } } } }
+        launch { runCatching { stub.receiveBankChanges(s.getRequest(), s.headers).collect { bm ->
+            if (recording) captured += "Bank ${bm.changeType} id=${bm.bankId.take(8)} ${bm.changeCase}=${bm.property}${bm.parameter} wert=${bm.newValue.text()}"
+            runCatching { _banks.value = stub.dl(10).getBanks(s.getMultiple(), s.headers).banksList.sortedBy { b -> b.number } } } } }
         launch { runCatching { stub.receiveConnectionSetChanges(s.getRequest(), s.headers).collect { m ->
+            if (recording) captured += "Set ${m.changeType} id=${m.connectionSetId.take(8)} ${m.changeCase}=${m.property}${m.parameter}${m.nodeParameter} node=${m.nodeId.nodeId.take(8)} wert=${m.newValue.text()} set=${if (m.hasSet()) m.set.name else "-"}"
             if (m.changeCase != LumosProtobuf.Input.InputServiceCRUDTypes.ConnectionSetChangedMessage.ChangeCase.CHANGE_NOT_SET)
                 Diag.note("Eingangszuweisung Änderung: ${m.changeCase} = ${m.property}${m.parameter}${m.nodeParameter} (Knoten ${m.nodeId.nodeId.take(8)}, Wert ${m.newValue.text()})")
             if (m.hasSet() && m.set.containsNodes) _sets.update { it + (m.set.id to m.set) }
@@ -218,6 +221,106 @@ class InputGraphModule(s: UmbraSession) : Module(s, "Eingangszuweisung") {
     // ================================================================ Parameter (Aktiv, Baustein-Werte)
     /** Funktionierender Parameter-Typname je Objektart, z. B. "set" → "ConnectionSet". */
     private val typeFor = HashMap<String, String>()
+
+    // ================================================================ Tiefentest (Diagnose)
+    @Volatile private var recording = false
+    private val captured = java.util.Collections.synchronizedList(ArrayList<String>())
+
+    /** Alle Änderungsmeldungen der Eingangszuweisung [seconds] lang mitschneiden (am PC etwas ändern). */
+    suspend fun recordChanges(seconds: Int): String {
+        captured.clear(); recording = true
+        delay(seconds * 1000L)
+        recording = false
+        return if (captured.isEmpty()) "Keine Änderungsmeldungen in $seconds s" else captured.joinToString("\n")
+    }
+
+    /**
+     * Sucht systematisch nach einem Zugang zu den Parametern der Bausteine:
+     * Namensschema an bekannten Objekten ablesen (Gerät, Gerätegruppe), dann für ausgewählte Bausteine
+     * alle Typnamen × ID-Formen per GetParameters und GetParameterValue("Position") durchprobieren.
+     * Liefert einen Bericht; jede nicht leere Antwort wird ausführlich protokolliert.
+     */
+    suspend fun deepProbe(): String {
+        val out = ArrayList<String>()
+        fun line(t: String) { out += t; Diag.note("Tiefentest: $t") }
+        suspend fun get(type: String, id: String, filter: List<String> = emptyList()) = runCatching {
+            par.dl(5).getParameters(GetParametersRequest.newBuilder().setType(type).setId(id).setIncludingValues(true)
+                .setUserContextId(s.userContextId).addAllNameFilter(filter).build(), s.headers)
+        }
+
+        // 1) Namensschema an bekannten Objekten
+        s.stage.devices.value.values.firstOrNull()?.let { d ->
+            get("Device", d.id).getOrNull()?.let { r ->
+                line("Kalibrierung Device: Antwort type=\"${r.type}\" id=${r.id.take(8)}, ${r.parametersCount} Parameter, Beispiel type=\"${r.parametersList.firstOrNull()?.type}\" subtype=\"${r.parametersList.firstOrNull()?.subtype}\"")
+            }
+        }
+        s.devices.groups.value.values.firstOrNull()?.let { g ->
+            get("DeviceGroup", g.id).getOrNull()?.let { r ->
+                line("Kalibrierung DeviceGroup: Antwort type=\"${r.type}\", ${r.parametersCount} Parameter, Beispiel type=\"${r.parametersList.firstOrNull()?.type}\"")
+            }
+        }
+
+        // 2) Set und Bausteine wählen (geöffnetes Set, sonst das mit den meisten Knoten)
+        val set = watched.value?.let { _sets.value[it] } ?: _sets.value.values.maxByOrNull { it.nodesCount }
+            ?: return "Keine Sets geladen"
+        val nodes = set.nodesList.filter { !it.hidden }.distinctBy { it.typeId }.sortedBy { if (it.typeId.contains("Cuelist", true)) 0 else 1 }.take(4)
+        line("Set \"${set.name}\" (${set.id.take(8)}), getestete Bausteine: " + nodes.joinToString { "${it.name.ifBlank { "?" }} [${it.type}] typeId=${it.typeId}" })
+        nodes.forEach { n ->
+            line("Baustein ${n.name}: graphId=${n.id.graphId.take(8)} nodeId=${n.id.nodeId.take(8)} memberInputValue=\"${n.memberInputValue}\" Kategorie=\"${n.category.name}\" Anschlüsse=" +
+                n.portsList.joinToString { (if (it.isInput) "in:" else "out:") + it.displayName.ifBlank { it.shortName } })
+        }
+
+        // 3) Typnamen × ID-Formen
+        var calls = 0; var hits = 0
+        val errors = LinkedHashMap<String, Int>()
+        val echoes = LinkedHashSet<String>()
+        for (n in nodes) {
+            val short = n.typeId.substringAfterLast('.')
+            val ns = n.typeId.substringBeforeLast('.', "")
+            val types = (listOf("", "*", "Node", "GraphNode", "InputNode", "InputGraphNode", "LumosGraphNode", "GraphNodeBase", "ConnectionSetNode",
+                "InputAssignmentNode", "InputAssignment", "Worker", "InputWorker", "Source", "Sink", "InputSource", "InputSink", "Input", "Output",
+                "Graph", "ConnectionSet", "Element", "InputElement", "Object", "Parameter", "Lumos", n.typeId, n.typeId.lowercase(), short,
+                short.removeSuffix("Node"), short.removeSuffix("Worker"), "$short, LumosLIB", n.category.name, n.name) +
+                (if (ns.isNotBlank()) listOf(ns, "$ns.Node", "$ns.GraphNode") else emptyList())).distinct()
+            val ids = listOf(n.id.nodeId, "${n.id.graphId}/${n.id.nodeId}", "${n.id.graphId}:${n.id.nodeId}", "${n.id.graphId}.${n.id.nodeId}",
+                "${n.id.graphId}|${n.id.nodeId}", "${set.id}/${n.id.nodeId}", "${set.id}:${n.id.nodeId}", n.id.nodeId.uppercase(), n.id.graphId, set.id).distinct()
+            for (t in types) for (id in ids) for (filter in listOf(emptyList(), listOf("Position"))) {
+                calls++
+                val r = get(t, id, filter)
+                val resp = r.getOrNull()
+                if (resp == null) {
+                    val msg = (r.exceptionOrNull()?.message ?: "?").take(100)
+                    errors[msg] = (errors[msg] ?: 0) + 1
+                    continue
+                }
+                if (resp.type != t || resp.id != id) echoes += "\"$t\"/${id.take(12)} → Antwort type=\"${resp.type}\" id=${resp.id.take(12)}"
+                if (resp.parametersCount > 0) {
+                    hits++
+                    line("TREFFER: type=\"$t\" id=$id filter=$filter → " + resp.parametersList.joinToString { "${it.name}(${it.parameterValueTypeAQ.substringBefore(',')})" })
+                }
+            }
+            // 4) Einzelwert "Position" direkt
+            for (t in types.take(12) + listOf(n.typeId, short)) for (id in ids.take(5)) {
+                calls++
+                val r = runCatching {
+                    par.dl(5).getParameterValue(LumosProtobuf.ParameterServiceTypes.GetParameterValueRequest.newBuilder().setId(id).setUserContextId(s.userContextId)
+                        .setParameter(LumosProtobuf.ParameterServiceTypes.GenericParameterData.newBuilder().setName("Position").setType(t)).build(), s.headers)
+                }
+                val v = r.getOrNull()
+                if (v != null && v.hasValue() && (v.value.valueCase != ObjectData.ValueCase.VALUE_NOT_SET || v.value.fallbackCase != ObjectData.FallbackCase.FALLBACK_NOT_SET)) {
+                    hits++
+                    line("TREFFER GetParameterValue: type=\"$t\" id=$id → ${v.value.text()}")
+                } else if (v == null) {
+                    val msg = (r.exceptionOrNull()?.message ?: "?").take(100)
+                    errors["GetParameterValue: $msg"] = (errors["GetParameterValue: $msg"] ?: 0) + 1
+                }
+            }
+        }
+        line("Ergebnis: $calls Abfragen, $hits Treffer")
+        if (echoes.isNotEmpty()) line("Abweichende Antworten: " + echoes.take(8).joinToString(" | "))
+        if (errors.isNotEmpty()) line("Fehlermeldungen: " + errors.entries.take(6).joinToString(" | ") { "${it.value}× ${it.key}" })
+        return out.joinToString("\n")
+    }
 
     /** Funktionierende Objekt-ID-Schreibweise je Objektart (Index in den Kandidaten). */
     private val idFor = HashMap<String, String>()

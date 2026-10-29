@@ -48,11 +48,11 @@ fun DiagnosticsScreen(s: UmbraSession) {
     val ctx = LocalContext.current
     var running by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
 
-    fun test(name: String, block: suspend () -> String) {
+    fun test(name: String, timeoutS: Int = 30, block: suspend () -> String) {
         if (running) return
         running = true
         scope.launch {
-            val r = try { block() } catch (e: Exception) { "$name: ${e.describe()}" }
+            val r = try { kotlinx.coroutines.withTimeout(timeoutS * 1000L) { block() } } catch (e: Exception) { "$name: ${e.describe()}" }
             results.add(0, "${Diag.ts()}  $r")
             Diag.note(r)
             running = false
@@ -107,6 +107,18 @@ fun DiagnosticsScreen(s: UmbraSession) {
                         }.ifBlank { "Keine Master" }
                     }
                 }, modifier = Modifier.fillMaxWidth()) { Text("Master: Fader-Schlüssel anzeigen") }
+                Text("Eingangszuweisung", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
+                Text(
+                    "Tiefentest: sucht mit allen denkbaren Typnamen und ID-Formen nach den Parametern der Bausteine (Position, Fade Factor …). " +
+                        "Vorher in „Zuweisung“ das zu testende Set öffnen. Dauert bis zu einer Minute.",
+                    style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+                )
+                OutlinedButton(enabled = !running, onClick = { test("Tiefentest", 120) { s.inputGraph.deepProbe() } }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Baustein-Parameter: Tiefentest")
+                }
+                OutlinedButton(enabled = !running, onClick = { test("Änderungen", 40) { s.inputGraph.recordChanges(30) } }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Änderungen 30 s mitschneiden (am PC Baustein verschieben/Wert ändern)")
+                }
                 results.forEach { r -> Text(r, style = MaterialTheme.typography.bodySmall.merge(Numeric)) }
             }
         }
