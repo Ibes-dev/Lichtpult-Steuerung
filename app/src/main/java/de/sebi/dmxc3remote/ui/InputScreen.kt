@@ -8,6 +8,7 @@ import LumosProtobuf.Input.InputServiceTypes.PortMetadataData
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -311,7 +312,7 @@ private fun Overview(s: UmbraSession, set: ConnectionSetDescriptor, onPick: (Str
                     }
                 }
                 .pointerInput(nodes, pos) {
-                    androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress(
+                    detectDragGesturesAfterLongPress(
                         onDragStart = { t ->
                             val w = (t - pan) / (zoom * dens)
                             nodes.lastOrNull { n -> pos[n.id.nodeId]?.let { Rect(it, Size(NW, NH)).contains(w) } == true }?.let {
