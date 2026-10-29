@@ -267,6 +267,37 @@ class InputGraphModule(s: UmbraSession) : Module(s, "Eingangszuweisung") {
         _nodeParams.update { it + (id to (r?.second ?: emptyList())) }
     }
 
+    /**
+     * Baustein verschieben: Parameter "Position" des Bausteins (in DMXControl sichtbar als "518, -69").
+     * Die Kodierung des Werts ist nicht dokumentiert – die App spiegelt das gelesene Format bzw.
+     * probiert PointData und Text "x, y" und prüft am neu geladenen Set, ob die Position stimmt.
+     */
+    fun moveNode(setId: String, node: NodeMetadataData, x: Float, y: Float) = act("Baustein verschieben") {
+        val id = node.id.nodeId
+        val (t, list) = params("node", listOf("Node", "GraphNode", "InputNode", node.typeId), id)
+            ?: throw UmbraException("DMXControl bietet die Position dieses Bausteins nicht über die Schnittstelle an")
+        val p = list.firstOrNull { it.desc.name.equals("Position", true) || it.desc.displayName.equals("Position", true) }
+            ?: throw UmbraException("Kein Positions-Parameter gefunden (${list.joinToString { it.desc.name }})")
+        val xi = Math.round(x); val yi = Math.round(y)
+        val point = PointData.newBuilder().setX(xi.toFloat()).setY(yi.toFloat()).build()
+        val cur = p.value
+        val candidates = buildList {
+            if (cur != null && cur.fallbackCase == ObjectData.FallbackCase.FALLBACKPROTOBUF)
+                add("Vorlage" to cur.toBuilder().setFallbackProtobuf(point.toByteString()).build())
+            add("Text" to ObjectData.newBuilder().setStringValue("$xi, $yi").build())
+            add("PointData" to ObjectData.newBuilder().setFallbackProtobuf(point.toByteString()).setProtobufTypeAQ("LumosProtobuf.PointData").build())
+        }
+        for ((name, v) in candidates) {
+            val r = runCatching { setParam(t, id, p, v) }
+            if (r.isFailure) { Diag.note("Baustein verschieben ($name): abgelehnt ${r.exceptionOrNull()?.message}"); continue }
+            reloadSet(setId)
+            val now = _sets.value[setId]?.nodesList?.firstOrNull { it.id.nodeId == id }?.position
+            Diag.note("Baustein verschieben ($name): soll $xi, $yi – ist ${now?.x}, ${now?.y}")
+            if (now != null && kotlin.math.abs(now.x - xi) < 2 && kotlin.math.abs(now.y - yi) < 2) return@act
+        }
+        throw UmbraException("DMXControl hat die neue Position nicht übernommen (Details unter Diagnose)")
+    }
+
     fun setNodeParam(node: NodeMetadataData, p: DevParam, v: ObjectData) = s.throttler.submit("node:${node.id.nodeId}:${p.desc.name}") {
         val t = typeFor["node"] ?: return@submit
         setParam(t, node.id.nodeId, p, v)

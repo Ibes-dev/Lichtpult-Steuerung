@@ -95,6 +95,14 @@ private fun NodeMetadataData.kindLabel() = when (type) {
     else -> "Baustein"
 }
 
+/** Art plus – falls vorhanden – Wert des Ausgangs "Name" (z. B. Cuelist: "Baustein · OF Bühne"). */
+private fun NodeMetadataData.kindWithName(values: Map<String, String>): String {
+    val n = portsList.firstOrNull { !it.isInput && it.label().equals("Name", true) }?.let { values[portKey(it.id)] }?.takeIf { it.isNotBlank() }
+    return kindLabel() + (n?.let { " · $it" } ?: "")
+}
+
+private fun PortMetadataData.isNamePort() = !isInput && label().equals("Name", true)
+
 private fun NodeMetadataData.title() = name.ifBlank { memberInputValue.ifBlank { typeId.substringAfterLast('.') } }
 
 private fun PortMetadataData.label() = displayName.ifBlank { shortName.ifBlank { id.portId } }
@@ -273,6 +281,10 @@ private fun Overview(s: UmbraSession, set: ConnectionSetDescriptor, onPick: (Str
     var pan by remember { mutableStateOf(Offset.Zero) }
     var addOpen by remember { mutableStateOf(false) }
     val pick by rememberUpdatedState(onPick)
+    // Verschieben: lange drücken, ziehen, loslassen → Position an DMXControl
+    var dragId by remember { mutableStateOf<String?>(null) }
+    var dragPos by remember { mutableStateOf(Offset.Zero) }
+    val shown = if (dragId != null) pos + (dragId!! to dragPos) else pos
 
     val dens = androidx.compose.ui.platform.LocalDensity.current.density
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -291,11 +303,29 @@ private fun Overview(s: UmbraSession, set: ConnectionSetDescriptor, onPick: (Str
         val z = (zoom.takeIf { it > 0f } ?: 1f) * dens
         Canvas(
             Modifier.fillMaxSize().background(Desk.Surface)
+                // äußerster Detektor = erhält Ereignisse zuletzt (Main-Durchlauf von innen nach außen)
                 .pointerInput(Unit) {
                     detectTransformGestures { c, p, zz, _ ->
                         val nz = (zoom * zz).coerceIn(0.2f, 3f)
                         pan = c - (c - pan) * (nz / zoom) + p; zoom = nz
                     }
+                }
+                .pointerInput(nodes, pos) {
+                    androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress(
+                        onDragStart = { t ->
+                            val w = (t - pan) / (zoom * dens)
+                            nodes.lastOrNull { n -> pos[n.id.nodeId]?.let { Rect(it, Size(NW, NH)).contains(w) } == true }?.let {
+                                dragId = it.id.nodeId; dragPos = pos[it.id.nodeId] ?: Offset.Zero
+                            }
+                        },
+                        onDragEnd = {
+                            val id = dragId
+                            val n = nodes.firstOrNull { it.id.nodeId == id }
+                            if (n != null) m.moveNode(set.id, n, dragPos.x, dragPos.y)
+                            dragId = null
+                        },
+                        onDragCancel = { dragId = null }
+                    ) { change, d -> if (dragId != null) { change.consume(); dragPos += d / (zoom * dens) } }
                 }
                 .pointerInput(nodes, pos) {
                     detectTapGestures { t ->
@@ -311,7 +341,7 @@ private fun Overview(s: UmbraSession, set: ConnectionSetDescriptor, onPick: (Str
             }
             fun sc(o: Offset) = Offset(pan.x + o.x * z, pan.y + o.y * z)
             edges.forEach { e ->
-                val a = pos[e.from.nodeId.nodeId] ?: return@forEach; val b = pos[e.to.nodeId.nodeId] ?: return@forEach
+                val a = shown[e.from.nodeId.nodeId] ?: return@forEach; val b = shown[e.to.nodeId.nodeId] ?: return@forEach
                 val p = sc(a + Offset(NW, NH / 2)); val q = sc(b + Offset(0f, NH / 2))
                 val dx = max(40f * z, abs(q.x - p.x) * 0.45f)
                 val path = Path().apply { moveTo(p.x, p.y); cubicTo(p.x + dx, p.y, q.x - dx, q.y, q.x, q.y) }
@@ -322,16 +352,17 @@ private fun Overview(s: UmbraSession, set: ConnectionSetDescriptor, onPick: (Str
             val small = android.graphics.Paint(paint).apply { textSize = paint.textSize * 0.8f; isFakeBoldText = false; color = android.graphics.Color.rgb(141, 149, 163) }
             val green = android.graphics.Paint(small).apply { color = android.graphics.Color.rgb(91, 209, 139) }
             nodes.forEach { n ->
-                val o = pos[n.id.nodeId] ?: return@forEach
+                val o = shown[n.id.nodeId] ?: return@forEach
                 val tl = sc(o); val sz = Size(NW * z, NH * z)
                 drawRoundRect(Desk.Panel, tl, sz, CornerRadius(8f * z))
+                if (n.id.nodeId == dragId) drawRoundRect(Desk.Amber, tl, sz, CornerRadius(8f * z), style = Stroke(2f * dens))
                 drawRoundRect(n.color(), tl, Size(sz.width, 3f * z.coerceAtLeast(1f)), CornerRadius(2f))
                 if (paint.textSize >= 7f * dens) {
                     val nc = drawContext.canvas.nativeCanvas
                     val pad = 8f * z
                     nc.drawText(ellipsize(n.title(), paint, sz.width - 2 * pad), tl.x + pad, tl.y + 19f * z, paint)
-                    nc.drawText(ellipsize(n.kindLabel(), small, sz.width - 2 * pad), tl.x + pad, tl.y + 33f * z, small)
-                    n.shownPorts().firstOrNull { !it.isInput && values[portKey(it.id)] != null }?.let { pp ->
+                    nc.drawText(ellipsize(n.kindWithName(values), small, sz.width - 2 * pad), tl.x + pad, tl.y + 33f * z, small)
+                    n.shownPorts().firstOrNull { !it.isInput && !it.isNamePort() && values[portKey(it.id)] != null }?.let { pp ->
                         nc.drawText(ellipsize("${pp.label()}: ${values[portKey(pp.id)]}", green, sz.width - 2 * pad), tl.x + pad, tl.y + 47f * z, green)
                     }
                 } else {
@@ -341,7 +372,7 @@ private fun Overview(s: UmbraSession, set: ConnectionSetDescriptor, onPick: (Str
                 }
             }
         }
-        Text("Antippen = bearbeiten · zwei Finger = zoomen/verschieben", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim,
+        Text("Antippen = bearbeiten · lange drücken = Baustein verschieben · zwei Finger = zoomen", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim,
             modifier = Modifier.align(Alignment.BottomStart).padding(10.dp).background(Desk.Surface.copy(alpha = 0.8f), RoundedCornerShape(6.dp)).padding(6.dp))
         Column(Modifier.align(Alignment.BottomEnd).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             RoundBtn("⤢") { zoom = 0f }
@@ -378,25 +409,30 @@ private fun Focus(s: UmbraSession, set: ConnectionSetDescriptor, node: NodeMetad
     var connectFor by remember { mutableStateOf<PortMetadataData?>(null) }
     var paramsOpen by remember { mutableStateOf(false) }
     var confirmDel by remember { mutableStateOf(false) }
-    // Positionen für die Kabel (im Koordinatensystem der Zeile)
-    val boxes = remember { mutableStateMapOf<String, Rect>() }
-    var origin by remember { mutableStateOf(Offset.Zero) }
+    // Kabel-Endpunkte: Layout-Koordinaten der Elemente, beim Zeichnen relativ zur Zeile umgerechnet –
+    // so stimmen die Kabel auch, wenn die Seite gescrollt ist
+    val coords = remember { HashMap<String, androidx.compose.ui.layout.LayoutCoordinates>() }
+    var rowC by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
+    var layoutTick by remember { mutableStateOf(0) }
 
     fun portLabel(p: GraphNodePortIDData) = byId[p.nodeId.nodeId]?.portsList?.firstOrNull { it.id.portId == p.portId }?.label() ?: p.portId
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp)) {
         Row(
             Modifier.fillMaxWidth()
-                .onGloballyPositioned { origin = it.boundsInRoot().topLeft }
+                .onGloballyPositioned { rowC = it; layoutTick++ }
                 .drawBehind {
+                    layoutTick   // bei jedem Layout neu zeichnen
+                    val rc = rowC ?: return@drawBehind
+                    fun box(k: String): Rect? = coords[k]?.takeIf { it.isAttached && rc.isAttached }?.let { rc.localBoundingBoxOf(it, false) }
                     fun wire(a: Rect?, b: Rect?, c: Color) {
                         if (a == null || b == null) return
-                        val p = Offset(a.right, a.center.y) - origin; val q = Offset(b.left, b.center.y) - origin
+                        val p = Offset(a.right, a.center.y); val q = Offset(b.left, b.center.y)
                         val dx = max(10f, (q.x - p.x) * 0.5f)
                         drawPath(Path().apply { moveTo(p.x, p.y); cubicTo(p.x + dx, p.y, q.x - dx, q.y, q.x, q.y) }, c, style = Stroke(2.5f))
                     }
-                    inE.forEach { e -> wire(boxes["up:${e.key}"], boxes["me:${e.to.portId}"], wireColor(values[portKey(e.from)])) }
-                    outE.forEach { e -> wire(boxes["me:${e.from.portId}"], boxes["dn:${e.key}"], wireColor(values[portKey(e.from)])) }
+                    inE.forEach { e -> wire(box("up:${e.key}"), box("me:${e.to.portId}"), wireColor(values[portKey(e.from)])) }
+                    outE.forEach { e -> wire(box("me:${e.from.portId}"), box("dn:${e.key}"), wireColor(values[portKey(e.from)])) }
                 },
             horizontalArrangement = Arrangement.spacedBy(22.dp)
         ) {
@@ -406,7 +442,7 @@ private fun Focus(s: UmbraSession, set: ConnectionSetDescriptor, node: NodeMetad
                 if (inE.isEmpty()) Text("–", color = Desk.TextDim)
                 inE.forEach { e ->
                     val n = byId[e.from.nodeId.nodeId]
-                    NeighborCard(n, portLabel(e.from), values[portKey(e.from)], Modifier.onGloballyPositioned { boxes["up:${e.key}"] = it.boundsInRoot() }) { n?.let { onGo(it.id.nodeId) } }
+                    NeighborCard(n, n?.kindWithName(values), portLabel(e.from), values[portKey(e.from)], Modifier.onGloballyPositioned { coords["up:${e.key}"] = it }) { n?.let { onGo(it.id.nodeId) } }
                 }
             }
             // Der Baustein
@@ -414,9 +450,9 @@ private fun Focus(s: UmbraSession, set: ConnectionSetDescriptor, node: NodeMetad
                 Box(Modifier.fillMaxWidth().height(4.dp).background(node.color()))
                 Column(Modifier.padding(8.dp)) {
                     Text(node.title(), style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(node.kindLabel() + (node.description.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(node.kindWithName(values) + (node.description.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 4.dp)) {
-                        if (node.type == ENodeType.WORKER) SmallChip("⚙ Werte", false, { paramsOpen = true; m.loadNodeParams(node) })
+                        SmallChip("⚙ Werte", false, { paramsOpen = true; m.loadNodeParams(node) })
                         SmallChip("Entfernen", false, { confirmDel = true })
                     }
                 }
@@ -424,7 +460,7 @@ private fun Focus(s: UmbraSession, set: ConnectionSetDescriptor, node: NodeMetad
                     val linked = p.connectedPortsCount > 0
                     val v = values[portKey(p.id)]
                     HorizontalDivider(color = Desk.Line)
-                    Column(Modifier.fillMaxWidth().onGloballyPositioned { boxes["me:${p.id.portId}"] = it.boundsInRoot() }.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                    Column(Modifier.fillMaxWidth().onGloballyPositioned { coords["me:${p.id.portId}"] = it }.padding(horizontal = 8.dp, vertical = 4.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (p.isInput) Box(Modifier.size(10.dp).clip(CircleShape).background(if (linked) wireColor(v) else Desk.Line))
                             Text(p.label(), style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f).padding(horizontal = 6.dp),
@@ -446,7 +482,7 @@ private fun Focus(s: UmbraSession, set: ConnectionSetDescriptor, node: NodeMetad
                 if (outE.isEmpty()) Text("–", color = Desk.TextDim)
                 outE.forEach { e ->
                     val n = byId[e.to.nodeId.nodeId]
-                    NeighborCard(n, portLabel(e.to), values[portKey(e.to)], Modifier.onGloballyPositioned { boxes["dn:${e.key}"] = it.boundsInRoot() }) { n?.let { onGo(it.id.nodeId) } }
+                    NeighborCard(n, n?.kindWithName(values), portLabel(e.to), values[portKey(e.to)], Modifier.onGloballyPositioned { coords["dn:${e.key}"] = it }) { n?.let { onGo(it.id.nodeId) } }
                 }
             }
         }
@@ -483,14 +519,15 @@ private fun Focus(s: UmbraSession, set: ConnectionSetDescriptor, node: NodeMetad
 }
 
 @Composable
-private fun NeighborCard(n: NodeMetadataData?, port: String, value: String?, modifier: Modifier, onClick: () -> Unit) {
+private fun NeighborCard(n: NodeMetadataData?, kind: String?, port: String, value: String?, modifier: Modifier, onClick: () -> Unit) {
     Column(
         modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Desk.Panel).clickable(onClick = onClick)
     ) {
         Box(Modifier.fillMaxWidth().height(3.dp).background(n?.color() ?: Desk.Line))
         Column(Modifier.padding(6.dp)) {
             Text(n?.title() ?: "?", style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(port, style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (kind != null) Text(kind, style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("› $port", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (value != null) Text(value, style = MaterialTheme.typography.labelSmall.merge(Numeric), color = Desk.Green, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
@@ -600,7 +637,8 @@ private fun NodeParamsSheet(s: UmbraSession, node: NodeMetadataData, onClose: ()
                         (node.memberInputValue.takeIf { it.isNotBlank() }?.let { "\nAktuelle Einstellung: $it" } ?: ""),
                     style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
                 )
-                else -> list.sortedBy { it.desc.saveOrder }.forEach { p -> ParamEditor(p, onSet = { v -> m.setNodeParam(node, p, v) }) }
+                else -> list.filter { !it.desc.name.equals("Position", true) }.sortedBy { it.desc.saveOrder }
+                    .forEach { p -> ParamEditor(p, onSet = { v -> m.setNodeParam(node, p, v) }) }
             }
         }
     }
