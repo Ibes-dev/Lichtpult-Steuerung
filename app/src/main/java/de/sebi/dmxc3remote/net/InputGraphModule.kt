@@ -227,7 +227,11 @@ class InputGraphModule(s: UmbraSession) : Module(s, "Eingangszuweisung") {
      * bis DMXControl Parameter liefert. Fehlermeldungen von DMXControl werden protokolliert –
      * sie verraten oft den erwarteten Typ.
      */
+    /** Objektarten, für die DMXControl in dieser Sitzung keine Parameter liefert (nicht erneut durchprobieren). */
+    private val unavailable = HashSet<String>()
+
     private suspend fun params(kind: String, candidates: List<String>, id: String, idVariants: List<String> = listOf(id)): Pair<String, List<DevParam>>? {
+        if (kind in unavailable) return null
         val types = (listOfNotNull(typeFor[kind]) + candidates).filter { it.isNotBlank() }.distinct()
         val ids = idVariants.distinct()
         val errors = LinkedHashSet<String>()
@@ -245,6 +249,8 @@ class InputGraphModule(s: UmbraSession) : Module(s, "Eingangszuweisung") {
         }
         Diag.note("Eingangszuweisung: keine Parameter für $kind unter ${types.size} Typen × ${ids.size} ID-Formen" +
             if (errors.isNotEmpty()) "; Meldungen: " + errors.take(4).joinToString(" | ") else "")
+        // Nur merken, wenn DMXControl ohne Fehler leer geantwortet hat (Schnittstelle bietet es nicht an)
+        if (errors.isEmpty() && typeFor[kind] == null) unavailable += kind
         return null
     }
 
@@ -301,7 +307,7 @@ class InputGraphModule(s: UmbraSession) : Module(s, "Eingangszuweisung") {
     fun moveNode(setId: String, node: NodeMetadataData, x: Float, y: Float) = act("Baustein verschieben") {
         val id = node.id.nodeId
         val (t, list) = params("node", nodeTypes(node), id, nodeIds(node))
-            ?: throw UmbraException("Baustein-Parameter über die Schnittstelle nicht gefunden (Details unter Diagnose)")
+            ?: throw UmbraException("DMXControl stellt Position und Werte der Bausteine über die Schnittstelle nicht bereit")
         val p = list.firstOrNull { it.desc.name.equals("Position", true) || it.desc.displayName.equals("Position", true) }
             ?: throw UmbraException("Kein Positions-Parameter gefunden (${list.joinToString { it.desc.name }})")
         val xi = Math.round(x); val yi = Math.round(y)

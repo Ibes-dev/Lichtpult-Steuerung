@@ -7,8 +7,8 @@ import LumosProtobuf.Input.InputServiceTypes.NodeMetadataData
 import LumosProtobuf.Input.InputServiceTypes.PortMetadataData
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -223,10 +223,16 @@ private fun SetList(
         items(list, key = { it.id }) { set ->
             val edges = remember(set) { m.edges(set) }
             Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Desk.Panel).clickable { onOpen(set.id) }.padding(10.dp)
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Desk.Panel)
+                    .then(if (set.state and 4 != 0) Modifier.border(1.dp, Desk.Red, RoundedCornerShape(12.dp)) else Modifier)
+                    .clickable { onOpen(set.id) }.padding(10.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(set.name.ifBlank { "Verbindungs-Set" }, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (set.state and 4 != 0) Text(
+                        "Fehler", style = MaterialTheme.typography.labelSmall, color = Color.White,
+                        modifier = Modifier.padding(end = 6.dp).clip(RoundedCornerShape(8.dp)).background(Desk.Red).padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
                     IconButton(onClick = { delSet = set }, modifier = Modifier.size(36.dp)) { Icon(Icons.Filled.Delete, contentDescription = "Set löschen", tint = Desk.TextDim) }
                     Switch(checked = set.active, onCheckedChange = { m.setSetActive(set.id, it) })
                 }
@@ -311,23 +317,7 @@ private fun Overview(s: UmbraSession, set: ConnectionSetDescriptor, onPick: (Str
                         pan = c - (c - pan) * (nz / zoom) + p; zoom = nz
                     }
                 }
-                .pointerInput(nodes, pos) {
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { t ->
-                            val w = (t - pan) / (zoom * dens)
-                            nodes.lastOrNull { n -> pos[n.id.nodeId]?.let { Rect(it, Size(NW, NH)).contains(w) } == true }?.let {
-                                dragId = it.id.nodeId; dragPos = pos[it.id.nodeId] ?: Offset.Zero
-                            }
-                        },
-                        onDragEnd = {
-                            val id = dragId
-                            val n = nodes.firstOrNull { it.id.nodeId == id }
-                            if (n != null) m.moveNode(set.id, n, dragPos.x, dragPos.y)
-                            dragId = null
-                        },
-                        onDragCancel = { dragId = null }
-                    ) { change, d -> if (dragId != null) { change.consume(); dragPos += d / (zoom * dens) } }
-                }
+                // Verschieben von Bausteinen: DMXControl stellt die Position über die Schnittstelle nicht bereit
                 .pointerInput(nodes, pos) {
                     detectTapGestures { t ->
                         val w = (t - pan) / (zoom * dens)
@@ -373,7 +363,7 @@ private fun Overview(s: UmbraSession, set: ConnectionSetDescriptor, onPick: (Str
                 }
             }
         }
-        Text("Antippen = bearbeiten · lange drücken = Baustein verschieben · zwei Finger = zoomen", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim,
+        Text("Antippen = bearbeiten · zwei Finger = zoomen/verschieben", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim,
             modifier = Modifier.align(Alignment.BottomStart).padding(10.dp).background(Desk.Surface.copy(alpha = 0.8f), RoundedCornerShape(6.dp)).padding(6.dp))
         Column(Modifier.align(Alignment.BottomEnd).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             RoundBtn("⤢") { zoom = 0f }
@@ -634,7 +624,8 @@ private fun NodeParamsSheet(s: UmbraSession, node: NodeMetadataData, onClose: ()
             when {
                 list == null -> Text("Werte werden geladen …", color = Desk.TextDim)
                 list.isEmpty() -> Text(
-                    "DMXControl stellt für diesen Baustein keine Werte über die Schnittstelle bereit." +
+                    "DMXControl stellt die Werte der Bausteine (z. B. Fade Factor, Intensity) über die Schnittstelle nicht bereit – " +
+                        "einstellbar nur am PC. Feste Werte lassen sich alternativ über einen Eingang „Konstante“ zuführen." +
                         (node.memberInputValue.takeIf { it.isNotBlank() }?.let { "\nAktuelle Einstellung: $it" } ?: ""),
                     style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
                 )
