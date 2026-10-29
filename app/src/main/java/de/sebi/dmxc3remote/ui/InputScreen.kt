@@ -203,9 +203,9 @@ private fun SetList(
     }
     if (cur == null) { EmptyHint("Keine Bänke", "In DMXControl ist keine Eingangszuweisung angelegt."); return }
     Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(if (cur.active) "Aktive Bank" else "Bank nicht aktiv", style = MaterialTheme.typography.labelMedium,
+        Text(if (cur.active) "Bank aktiv" else "Bank nicht aktiv", style = MaterialTheme.typography.labelMedium,
             color = if (cur.active) Desk.Green else Desk.TextDim, modifier = Modifier.weight(1f))
-        if (!cur.active) TextButton(onClick = { m.setBankActive(cur.id) }) { Text("Aktivieren") }
+        Switch(checked = cur.active, onCheckedChange = { m.setBankActive(cur.id, it) })
         TextButton(onClick = { newSet = true }) { Text("+ Set") }
     }
     val list = cur.connectionSetIdsList.mapNotNull { sets[it] }
@@ -274,19 +274,21 @@ private fun Overview(s: UmbraSession, set: ConnectionSetDescriptor, onPick: (Str
     var addOpen by remember { mutableStateOf(false) }
     val pick by rememberUpdatedState(onPick)
 
+    val dens = androidx.compose.ui.platform.LocalDensity.current.density
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val wPx = constraints.maxWidth.toFloat(); val hPx = constraints.maxHeight.toFloat()
+        // Weltkoordinaten (DMXControl-Positionen) gelten als dp: Pixel = Welt × zoom × Dichte
+        val wPx = constraints.maxWidth / dens; val hPx = constraints.maxHeight / dens
         val minX = pos.values.minOfOrNull { it.x } ?: 0f; val minY = pos.values.minOfOrNull { it.y } ?: 0f
         val maxX = (pos.values.maxOfOrNull { it.x } ?: 0f) + NW; val maxY = (pos.values.maxOfOrNull { it.y } ?: 0f) + NH
         // Einpassen beim Öffnen und mit ⤢ (zoom = 0)
         LaunchedEffect(zoom == 0f, pos, wPx, hPx) {
             if (zoom == 0f && pos.isNotEmpty()) {
-                val nz = minOf(wPx / (maxX - minX + 80f), hPx / (maxY - minY + 80f)).coerceIn(0.25f, 2.5f)
-                pan = Offset(40f * nz - minX * nz, 40f * nz - minY * nz)
+                val nz = minOf(wPx / (maxX - minX + 40f), hPx / (maxY - minY + 40f)).coerceIn(0.6f, 2f)
+                pan = Offset((20f - minX) * nz * dens, (20f - minY) * nz * dens)
                 zoom = nz
             }
         }
-        val z = zoom.takeIf { it > 0f } ?: 1f
+        val z = (zoom.takeIf { it > 0f } ?: 1f) * dens
         Canvas(
             Modifier.fillMaxSize().background(Desk.Surface)
                 .pointerInput(Unit) {
@@ -297,14 +299,14 @@ private fun Overview(s: UmbraSession, set: ConnectionSetDescriptor, onPick: (Str
                 }
                 .pointerInput(nodes, pos) {
                     detectTapGestures { t ->
-                        val w = (t - pan) / zoom
+                        val w = (t - pan) / (zoom * dens)
                         nodes.lastOrNull { n -> pos[n.id.nodeId]?.let { Rect(it, Size(NW, NH)).contains(w) } == true }?.let { pick(it.id.nodeId) }
                     }
                 }
         ) {
             // Punkteraster
             val step = 24f * z
-            if (step > 8f) {
+            if (step > 8f * dens) {
                 var x = pan.x % step; while (x < size.width) { var y = pan.y % step; while (y < size.height) { drawCircle(Desk.Line, 1.2f, Offset(x, y)); y += step }; x += step }
             }
             fun sc(o: Offset) = Offset(pan.x + o.x * z, pan.y + o.y * z)
@@ -313,24 +315,29 @@ private fun Overview(s: UmbraSession, set: ConnectionSetDescriptor, onPick: (Str
                 val p = sc(a + Offset(NW, NH / 2)); val q = sc(b + Offset(0f, NH / 2))
                 val dx = max(40f * z, abs(q.x - p.x) * 0.45f)
                 val path = Path().apply { moveTo(p.x, p.y); cubicTo(p.x + dx, p.y, q.x - dx, q.y, q.x, q.y) }
-                drawPath(path, wireColor(values[portKey(e.from)]), style = Stroke(2.5f))
+                drawPath(path, wireColor(values[portKey(e.from)]), style = Stroke(2f * dens))
             }
-            val paint = android.graphics.Paint().apply { isAntiAlias = true; textSize = 12f * z.coerceAtLeast(0.6f) * density; color = android.graphics.Color.WHITE }
-            val small = android.graphics.Paint(paint).apply { textSize = paint.textSize * 0.82f; color = android.graphics.Color.rgb(141, 149, 163) }
+            // Schrift wächst mit dem Zoom, so dass sie immer in den Baustein passt (13 dp bei Zoom 1)
+            val paint = android.graphics.Paint().apply { isAntiAlias = true; textSize = 13f * z; color = android.graphics.Color.WHITE; isFakeBoldText = true }
+            val small = android.graphics.Paint(paint).apply { textSize = paint.textSize * 0.8f; isFakeBoldText = false; color = android.graphics.Color.rgb(141, 149, 163) }
             val green = android.graphics.Paint(small).apply { color = android.graphics.Color.rgb(91, 209, 139) }
             nodes.forEach { n ->
                 val o = pos[n.id.nodeId] ?: return@forEach
                 val tl = sc(o); val sz = Size(NW * z, NH * z)
                 drawRoundRect(Desk.Panel, tl, sz, CornerRadius(8f * z))
                 drawRoundRect(n.color(), tl, Size(sz.width, 3f * z.coerceAtLeast(1f)), CornerRadius(2f))
-                if (z > 0.35f) {
+                if (paint.textSize >= 7f * dens) {
                     val nc = drawContext.canvas.nativeCanvas
-                    val pad = 7f * z
-                    nc.drawText(ellipsize(n.title(), paint, sz.width - 2 * pad), tl.x + pad, tl.y + 18f * z, paint)
-                    nc.drawText(n.kindLabel(), tl.x + pad, tl.y + 32f * z, small)
+                    val pad = 8f * z
+                    nc.drawText(ellipsize(n.title(), paint, sz.width - 2 * pad), tl.x + pad, tl.y + 19f * z, paint)
+                    nc.drawText(ellipsize(n.kindLabel(), small, sz.width - 2 * pad), tl.x + pad, tl.y + 33f * z, small)
                     n.shownPorts().firstOrNull { !it.isInput && values[portKey(it.id)] != null }?.let { pp ->
-                        nc.drawText(ellipsize("${pp.label()}: ${values[portKey(pp.id)]}", green, sz.width - 2 * pad), tl.x + pad, tl.y + 46f * z, green)
+                        nc.drawText(ellipsize("${pp.label()}: ${values[portKey(pp.id)]}", green, sz.width - 2 * pad), tl.x + pad, tl.y + 47f * z, green)
                     }
+                } else {
+                    // weit herausgezoomt: nur Kurzname mittig, ohne Unterzeilen
+                    val tiny = android.graphics.Paint(paint).apply { textSize = 7f * dens }
+                    if (sz.width > 24f * dens) drawContext.canvas.nativeCanvas.drawText(ellipsize(n.title(), tiny, sz.width - 4f), tl.x + 2f, tl.y + sz.height / 2 + 3f * dens, tiny)
                 }
             }
         }

@@ -251,11 +251,11 @@ class InputGraphModule(s: UmbraSession) : Module(s, "Eingangszuweisung") {
         reloadSet(id)
     }
 
-    /** Bank aktivieren. */
-    fun setBankActive(id: String) = act("Bank aktivieren") {
+    /** Bank ein- oder ausschalten. */
+    fun setBankActive(id: String, on: Boolean = true) = act(if (on) "Bank aktivieren" else "Bank deaktivieren") {
         val (t, list) = params("bank", listOf("Bank", "InputBank", "ConnectionSetBank"), id) ?: throw UmbraException("DMXControl bietet das Umschalten der Bank nicht über die Schnittstelle")
         val p = activeParam(list) ?: throw UmbraException("Kein Aktiv-Parameter für Bänke gefunden")
-        setParam(t, id, p, ObjectData.newBuilder().setBoolValue(true).build())
+        setParam(t, id, p, ObjectData.newBuilder().setBoolValue(on).build())
         _banks.value = stub.dl(10).getBanks(s.getMultiple(), s.headers).banksList.sortedBy { it.number }
     }
 
