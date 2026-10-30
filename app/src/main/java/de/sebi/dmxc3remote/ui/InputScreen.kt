@@ -647,8 +647,8 @@ private fun NodeParamsSheet(s: UmbraSession, setId: String, node: NodeMetadataDa
                 list == null -> Text("Werte werden geladen …", color = Desk.TextDim)
                 list.isEmpty() -> Text("Dieser Baustein hat keine einstellbaren Werte.", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
                 else -> {
-                    // Position wird per Ziehen geändert; Eingangs-Festwerte (IsPortParameter) als eigene Gruppe
-                    val shown = list.filter { it.desc.name != "Position" }.sortedBy { it.desc.saveOrder }
+                    // Alle Parameter als Textfelder (Position zusätzlich per Ziehen); Eingangs-Festwerte als eigene Gruppe
+                    val shown = list.sortedBy { it.desc.saveOrder }
                     val (ports, own) = shown.partition { it.desc.metadataMap["IsPortParameter"] == "true" }
                     own.forEach { p -> NodeParam(p) { v -> m.setNodeParam(setId, node, p, v) } }
                     if (ports.isNotEmpty()) {
@@ -662,39 +662,96 @@ private fun NodeParamsSheet(s: UmbraSession, setId: String, node: NodeMetadataDa
     }
 }
 
-/** Ein Baustein-Parameter: MultiTypeValue (Ein/Aus, Zahl) eigens, alles andere über den allgemeinen Editor. */
+/**
+ * Ein Baustein-Parameter als Textfeld – wie in der Eigenschaftsliste der Windows-Oberfläche.
+ * Die Eingabe wird passend zum Typ des Parameters umgewandelt:
+ *  Double/Single → Kommazahl, Int → ganze Zahl, Boolean → True/False, String → Text,
+ *  MultiTypeValue (z. B. On/Off Value) → True/False, Zahl oder beliebiger Text,
+ *  Point (Position) → "x, y".
+ * Auswahllisten (enumValues) bleiben Auswahl; nur-lesen-Parameter werden nur angezeigt.
+ */
 @Composable
 private fun NodeParam(p: de.sebi.dmxc3remote.net.DevParam, onSet: (LumosProtobuf.CommonTypes.ObjectData) -> Unit) {
     val v = p.value
-    // Option-Bit 2 = nur lesen (z. B. Name von Ein-/Ausgängen: options 11 statt 9 im Mitschnitt)
-    if (p.desc.options and 2 != 0) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(p.label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
-            Text(v?.text() ?: "–", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        return
+    val readOnly = p.desc.options and 2 != 0
+    if (p.desc.enumValuesCount > 0 && !readOnly) { ParamEditor(p, onSet = onSet); return }
+    val current = nodeValueText(v)
+    var text by remember(p.desc.name, current) { mutableStateOf(current) }
+    var bad by remember(p.desc.name) { mutableStateOf(false) }
+    fun commit() {
+        val o = nodeValueFromText(p, text)
+        bad = o == null
+        if (o != null && text != current) onSet(o)
     }
-    if (de.sebi.dmxc3remote.net.DotNetValue.isMulti(v)) {
-        val cur = de.sebi.dmxc3remote.net.DotNetValue.parseMulti(v)
-        Column {
-            Text(p.label, style = MaterialTheme.typography.labelLarge)
-            when (cur) {
-                is Boolean -> Switch(checked = cur, onCheckedChange = { b -> de.sebi.dmxc3remote.net.DotNetValue.buildMulti(v!!, b)?.let(onSet) })
-                is Int, is Double -> {
-                    var t by remember(p.desc.name, cur) { mutableStateOf(cur.toString()) }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        CompactSearch(t, { t = it }, "Wert", Modifier.weight(1f))
-                        TextButton(onClick = {
-                            val n = t.replace(',', '.')
-                            val nv: Any? = if (cur is Int) n.toDoubleOrNull()?.let { Math.round(it).toInt() } else n.toDoubleOrNull()
-                            nv?.let { de.sebi.dmxc3remote.net.DotNetValue.buildMulti(v!!, it)?.let(onSet) }
-                        }) { Text("Setzen") }
-                    }
-                }
-                else -> Text("– (kein Wert)", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+    Column {
+        Text(p.label, style = MaterialTheme.typography.labelLarge)
+        if (readOnly) {
+            Text(current.ifBlank { "–" }, style = MaterialTheme.typography.bodyMedium, color = Desk.TextDim)
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                androidx.compose.material3.OutlinedTextField(
+                    text, { text = it; bad = false }, singleLine = true, isError = bad,
+                    modifier = Modifier.weight(1f),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { commit() }),
+                    supportingText = { if (bad) Text(typeHint(p)) }
+                )
+                TextButton(onClick = { commit() }, enabled = text != current) { Text("Setzen") }
             }
         }
-        return
     }
-    ParamEditor(p, onSet = onSet)
+}
+
+private fun aqShort(p: de.sebi.dmxc3remote.net.DevParam) = p.desc.parameterValueTypeAQ.substringBefore(',').substringAfterLast('.')
+
+private fun typeHint(p: de.sebi.dmxc3remote.net.DevParam) = when (aqShort(p)) {
+    "Double", "Single", "Decimal" -> "Zahl erwartet, z. B. 0.5"
+    "Int16", "Int32", "Int64", "Byte", "UInt16", "UInt32" -> "Ganze Zahl erwartet"
+    "Boolean" -> "True oder False"
+    "Point" -> "Format: x, y"
+    else -> "Ungültiger Wert"
+}
+
+/** Anzeige eines Parameterwerts als Text (wie in der Windows-Oberfläche). */
+private fun nodeValueText(v: LumosProtobuf.CommonTypes.ObjectData?): String {
+    if (v == null) return ""
+    de.sebi.dmxc3remote.net.DotNetValue.parsePoint(v)?.let { (x, y) -> return "$x, $y" }
+    if (de.sebi.dmxc3remote.net.DotNetValue.isMulti(v)) return de.sebi.dmxc3remote.net.DotNetValue.multiText(v)
+    return when (v.valueCase) {
+        LumosProtobuf.CommonTypes.ObjectData.ValueCase.BOOLVALUE -> if (v.boolValue) "True" else "False"
+        LumosProtobuf.CommonTypes.ObjectData.ValueCase.DOUBLEVALUE -> java.math.BigDecimal(v.doubleValue).stripTrailingZeros().toPlainString()
+        LumosProtobuf.CommonTypes.ObjectData.ValueCase.FLOATVALUE -> java.math.BigDecimal(v.floatValue.toDouble()).stripTrailingZeros().toPlainString()
+        else -> v.text()
+    }
+}
+
+/** Texteingabe → Wert im Typ des Parameters; null = Eingabe passt nicht. */
+private fun nodeValueFromText(p: de.sebi.dmxc3remote.net.DevParam, t: String): LumosProtobuf.CommonTypes.ObjectData? {
+    val b = LumosProtobuf.CommonTypes.ObjectData.newBuilder()
+    val n = t.trim().replace(',', '.')
+    val v = p.value
+    if (de.sebi.dmxc3remote.net.DotNetValue.isMulti(v))
+        return de.sebi.dmxc3remote.net.DotNetValue.buildMulti(v!!, de.sebi.dmxc3remote.net.DotNetValue.multiFromText(t))
+    return when (aqShort(p)) {
+        "Point" -> Regex("""^\s*(-?\d+)\s*[;,]\s*(-?\d+)\s*$""").matchEntire(t)?.let { m ->
+            de.sebi.dmxc3remote.net.DotNetValue.buildPoint(m.groupValues[1].toInt(), m.groupValues[2].toInt())
+        }
+        "Double", "Decimal" -> n.toDoubleOrNull()?.let { b.setDoubleValue(it).build() }
+        "Single" -> n.toFloatOrNull()?.let { b.setFloatValue(it).build() }
+        "Int32" -> n.toIntOrNull()?.let { b.setIntValue(it).build() }
+        "Int16" -> n.toIntOrNull()?.let { b.setShortValue(it).build() }
+        "Int64" -> n.toLongOrNull()?.let { b.setLongValue(it).build() }
+        "Byte" -> n.toIntOrNull()?.let { b.setByteValue(it).build() }
+        "UInt32" -> n.toIntOrNull()?.let { b.setUintValue(it).build() }
+        "UInt16" -> n.toIntOrNull()?.let { b.setUshortValue(it).build() }
+        "Boolean" -> when { n.equals("true", true) -> b.setBoolValue(true).build(); n.equals("false", true) -> b.setBoolValue(false).build(); else -> null }
+        "String" -> b.setStringValue(t).build()
+        // unbekannter Typ: im Format des gelesenen Werts
+        else -> when (v?.valueCase) {
+            LumosProtobuf.CommonTypes.ObjectData.ValueCase.DOUBLEVALUE -> n.toDoubleOrNull()?.let { b.setDoubleValue(it).build() }
+            LumosProtobuf.CommonTypes.ObjectData.ValueCase.INTVALUE -> n.toIntOrNull()?.let { b.setIntValue(it).build() }
+            LumosProtobuf.CommonTypes.ObjectData.ValueCase.BOOLVALUE -> n.toBooleanStrictOrNull()?.let { b.setBoolValue(it).build() }
+            else -> b.setStringValue(t).build()
+        }
+    }
 }

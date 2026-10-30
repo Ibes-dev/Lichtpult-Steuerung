@@ -42,17 +42,49 @@ object DotNetValue {
         return ObjectData.newBuilder().setFallbackTypeAQ(POINT_AQ).setFallbackNet(ByteString.copyFrom(POINT_HEAD + body)).build()
     }
 
-    /** Wert in einem MultiTypeValue: Boolean, Int32, Double oder null. */
+    /** Wert in einem MultiTypeValue: Boolean, Int32, Double, String oder null. */
     fun parseMulti(v: ObjectData?): Any? {
         if (!isMulti(v) || v!!.fallbackCase != ObjectData.FallbackCase.FALLBACKNET) return null
         val b = v.fallbackNet.toByteArray()
         val i = indexOf(b, MULTI_HEAD_END).takeIf { it >= 0 }?.plus(MULTI_HEAD_END.size) ?: return null
-        if (i >= b.size || b[i] != 0x08.toByte() || i + 2 >= b.size) return null
-        return when (b[i + 1].toInt()) {
-            1 -> b[i + 2] != 0.toByte()
-            6 -> le(b, i + 2, 8).double
-            8 -> le(b, i + 2, 4).int
+        if (i >= b.size) return null
+        return when (b[i].toInt()) {
+            0x08 -> if (i + 2 >= b.size) null else when (b[i + 1].toInt()) {
+                1 -> b[i + 2] != 0.toByte()
+                6 -> le(b, i + 2, 8).double
+                8 -> le(b, i + 2, 4).int
+                else -> null
+            }
+            // BinaryObjectString: 0x06, Objekt-ID (int32), Länge (7-Bit-kodiert), UTF-8
+            0x06 -> {
+                var k = i + 5; var len = 0; var shift = 0
+                while (k < b.size) { val c = b[k++].toInt() and 0xFF; len = len or ((c and 0x7F) shl shift); shift += 7; if (c < 0x80) break }
+                if (k + len > b.size) null else String(b, k, len, Charsets.UTF_8)
+            }
             else -> null
+        }
+    }
+
+    /** Anzeige wie in der Windows-Oberfläche: True/False, Zahlen mit Punkt, Text unverändert. */
+    fun multiText(v: ObjectData?): String = when (val x = parseMulti(v)) {
+        is Boolean -> if (x) "True" else "False"
+        is Double -> java.math.BigDecimal(x).stripTrailingZeros().toPlainString()
+        null -> ""
+        else -> x.toString()
+    }
+
+    /**
+     * Eingabetext in den Wert eines MultiTypeValue: True/False → Ein/Aus, ganze Zahl → Int32,
+     * Kommazahl → Double, sonst Text. So frei wie in der Windows-Oberfläche.
+     */
+    fun multiFromText(t: String): Any {
+        val s = t.trim()
+        return when {
+            s.equals("true", true) -> true
+            s.equals("false", true) -> false
+            s.matches(Regex("-?\\d{1,9}")) -> s.toInt()
+            s.replace(',', '.').toDoubleOrNull() != null && s.any { it == '.' || it == ',' } -> s.replace(',', '.').toDouble()
+            else -> t
         }
     }
 
@@ -64,6 +96,13 @@ object DotNetValue {
             is Boolean -> byteArrayOf(0x08, 1, (if (value) 1 else 0).toByte())
             is Int -> byteArrayOf(0x08, 8) + ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()
             is Double -> byteArrayOf(0x08, 6) + ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putDouble(value).array()
+            is String -> {
+                // Objekt-ID 3: 1 = MultiTypeValue, 2 = Bibliothek (siehe Kopf)
+                val u = value.toByteArray(Charsets.UTF_8)
+                val len = ArrayList<Byte>(); var n = u.size
+                do { var c = n and 0x7F; n = n ushr 7; if (n != 0) c = c or 0x80; len += c.toByte() } while (n != 0)
+                byteArrayOf(0x06, 3, 0, 0, 0) + len.toByteArray() + u
+            }
             else -> return null
         }
         return template.toBuilder().setFallbackNet(ByteString.copyFrom(b.copyOfRange(0, i) + rec + MULTI_TAIL)).build()

@@ -90,4 +90,22 @@ class NetTest {
         assertEquals(0.75, DotNetValue.parseMulti(DotNetValue.buildMulti(tpl, 0.75)))
         assertEquals(42, DotNetValue.parseMulti(DotNetValue.buildMulti(tpl, 42)))
     }
+
+    @Test
+    fun multiTypeValueTextAndRules() {
+        val tpl = ObjectData.newBuilder()
+            .setFallbackTypeAQ("org.dmxc.lumos.Kernel.Input.v2.MultiTypeValue, LumosLIB, Version=3.3.3.0, Culture=neutral, PublicKeyToken=null")
+            .setFallbackNet(com.google.protobuf.ByteString.copyFrom(hex(capturedMulti))).build()
+        // freier Text, auch mit Umlauten und über 127 Byte (zweibytige Längenangabe)
+        assertEquals("Bühne an", DotNetValue.parseMulti(DotNetValue.buildMulti(tpl, "Bühne an")))
+        val long = "x".repeat(200)
+        assertEquals(long, DotNetValue.parseMulti(DotNetValue.buildMulti(tpl, long)))
+        // Eingaberegeln wie in der Windows-Oberfläche
+        assertEquals(true, DotNetValue.multiFromText("True"))
+        assertEquals(false, DotNetValue.multiFromText("false"))
+        assertEquals(42, DotNetValue.multiFromText("42"))
+        assertEquals(0.5, DotNetValue.multiFromText("0,5"))
+        assertEquals("Strobo", DotNetValue.multiFromText("Strobo"))
+        assertEquals("True", DotNetValue.multiText(tpl))
+    }
 }
