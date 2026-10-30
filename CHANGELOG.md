@@ -1,20 +1,27 @@
+# Lichtpult Remote 1.3.0
+
+## Neu
+- **Zuweisung** (neuer Menüpunkt, Eingangszuweisung von DMXControl): Bänke ein-/ausschalten, Verbindungs-Sets anlegen, umbenennen, löschen und ein-/ausschalten, Fehler-Badge wie in DMXControl.
+- **Übersicht als echter Graph** an den Positionen aus DMXControl, mit Live-Werten, Zoom und Verschieben; Bausteine per langem Drücken verschieben.
+- **Fokus-Ansicht** je Baustein mit Kabeln zu Vorgängern und Nachfolgern; Verbinden über Auswahlliste, Lösen, Bausteine sowie Ein-/Ausgänge hinzufügen und entfernen.
+- **Baustein-Werte** als Textfelder wie in der Windows-Oberfläche, inklusive Festwerten der Eingänge (z. B. Fade Factor, Switch threshold, On/Off Value).
+- **Programmer → Cues:** Cues verschieben, löschen und umbenennen; neue Cuelists anlegen und kopieren.
+- **Programmer speichern:** neu "In Cuelist" (als neuen Cue anhängen oder neue Cuelist mit erstem Cue).
+- **3D-Bühne:** StageView wahlweise als Draufsicht oder Frontansicht (System → Steuerung).
+- **Diagnose:** Tiefentest und Änderungs-Mitschnitt für die Zuweisung.
+
+## Behoben
+- Master-Fader ließen sich in der App nicht bewegen (Anzeige ging, Ändern nicht).
+- Speichern in Cues und Presets übernahm den Programmer-Inhalt nicht.
+- Preset aufrufen wurde abgelehnt; Eigenschafts-Presets wirken jetzt auf die gewählte Gerätegruppe, verständliche Meldungen statt "abgelehnt".
+- Cue und Cuelist umbenennen griff nicht.
+
 # Lichtpult Remote 1.2.0
 
 ## Neu
-- Eingangszuweisung: Bänke, Verbindungs-Sets mit Miniatur, Übersicht als echter Graph (Positionen aus DMXControl, zoomen/verschieben, Live-Werte), Fokus je Baustein mit Nachbarn und Kabeln, Verbinden über Auswahlliste, Lösen, Bausteine/Ein-/Ausgänge hinzufügen und entfernen, Sets anlegen und löschen; Bausteine in der Übersicht verschieben (lange drücken und ziehen), Werte der Bausteine und Festwerte der Eingänge einstellen (Schnittstelle per Mitschnitt der Windows-Oberfläche ermittelt), Sets umbenennen
 - Master-Controller wie in DMXControl: Abschnitte Grand, Gruppen, Parameter, Speed, Position, Farbe; Regler und Tasten (Flash, Stomp, Select, Fix …) aus den Daten von DMXControl, aktive Tasten leuchten
 - Speed-Master mit Tipp-Fläche (Learn), Sync, ×2, ½; Position-Master mit XY-Feld; Farb-Master mit Farbfeld, Farbton-Regler und Farbchips
 - Einstellung "Master kompakt anzeigen" unter System → Steuerung
-- Neue Cuelists anlegen und kopieren (Programmer → Cues: Neu)
-- Programmer → Cues: Reihenfolge ändern (Pfeile) und Cues löschen
-- 3D-Bühne: StageView wahlweise als Draufsicht oder Frontansicht (System → Steuerung), bei Frontansicht Tiefe je Gerät
-- Programmer speichern: neu "In Cuelist" – als neuen Cue an eine Cuelist anhängen oder neue Cuelist mit erstem Cue anlegen
-
-## Behoben
-- Speichern in Cues und Presets übernahm den Programmer-Inhalt nicht (Cues/Presets blieben leer); jetzt mit Auswahl des Programmer-Inhalts und Erfolgskontrolle
-- Cue und Cuelist umbenennen griff nicht; jetzt mit Erfolgskontrolle
-- Preset aufrufen wurde abgelehnt; die App probiert nun die Aufruf-Varianten und merkt sich die passende
-- Presets: Eigenschafts-Presets wirken auf die zuletzt gewählte Gerätegruppe; verständliche Meldungen statt "InvokePreset: abgelehnt"
 
 ## Geändert
 - Einheitliche Fader in der ganzen App (Executoren, Master, Bedienfeld, Programmer, Effekte, Cuelist-Intensität, Audio, 3D-Einrichtung)
