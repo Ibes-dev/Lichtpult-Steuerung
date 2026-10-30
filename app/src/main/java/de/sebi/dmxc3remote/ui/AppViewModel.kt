@@ -86,6 +86,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val micAutoApply = MutableStateFlow(prefs.micAutoApply)
     val micToDmxc = MutableStateFlow(prefs.micToDmxc)
     val cuelistCompact = MutableStateFlow(prefs.cuelistCompact)
+    val masterCompact = MutableStateFlow(prefs.masterCompact)
     val navOrder = MutableStateFlow(prefs.navOrder)
     val goCuelistId = MutableStateFlow(prefs.goCuelistId)
     val volumeKeysGo = MutableStateFlow(prefs.volumeKeysGo)
@@ -144,6 +145,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setMicAutoApply(v: Boolean) { prefs.micAutoApply = v; micAutoApply.value = v }
     fun setMicToDmxc(v: Boolean) { prefs.micToDmxc = v; micToDmxc.value = v }
     fun setCuelistCompact(v: Boolean) { prefs.cuelistCompact = v; cuelistCompact.value = v }
+    fun setMasterCompact(v: Boolean) { prefs.masterCompact = v; masterCompact.value = v }
     fun setNavOrder(names: List<String>) { val v = names.joinToString(","); prefs.navOrder = v; navOrder.value = v }
 
     /** Mikrofon im ViewModel-Scope: läuft weiter, auch wenn der Medien-Tab verlassen wird. */

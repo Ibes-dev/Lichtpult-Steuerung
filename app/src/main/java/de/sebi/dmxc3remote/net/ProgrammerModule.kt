@@ -95,6 +95,22 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
 
     private fun all() = ProgrammerFilterPredicate.newBuilder().setUserContextId(s.userContextId).build()
 
+    /**
+     * Auswahl dessen, was gespeichert wird. Die leere Auswahl (nur UserContext) übernimmt bei DMXControl
+     * offenbar nichts – Cues und Presets blieben leer. Daher zuerst eine Auswahl mit allen Gruppen,
+     * Geräten und Eigenschaften, die gerade im Programmer stehen; die leere Auswahl nur als Rückfall.
+     */
+    private suspend fun predicates(): List<Pair<String, ProgrammerFilterPredicate>> {
+        runCatching { refresh() }
+        val c = _content.value
+        val explicit = ProgrammerFilterPredicate.newBuilder().setUserContextId(s.userContextId)
+            .addAllIncludedGroupIds(c.map { it.id }.filter { it.isNotBlank() }.distinct())
+            .addAllIncludedDeviceIds(c.flatMap { g -> g.deviceStatesList.map { it.id } }.filter { it.isNotBlank() }.distinct())
+            .addAllIncludedPropertyIds((c.map { it.propertyId } + c.flatMap { g -> g.deviceStatesList.map { it.propertyId } }).filter { it.isNotBlank() }.distinct())
+            .build()
+        return listOf("Programmer-Inhalt" to explicit, "alles" to all())
+    }
+
     override suspend fun load() {
         refresh()
         _operators.value = runCatching {
@@ -197,33 +213,84 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
         attempt(null)
     }
 
-    /** Neuer Cue (ADD) bzw. Cue ersetzen/zusammenführen (REPLACE/MERGE an index). */
+    /**
+     * Neuer Cue (ADD) bzw. Cue ersetzen/zusammenführen (REPLACE/MERGE an index).
+     * Bei ADD wird geprüft, ob die Cuelist danach wirklich einen Cue mehr hat.
+     */
     fun storeToCue(cuelistId: String, type: CueAddFromProgrammerRequest.EAddType, index: Int, label: String) = act("Cue speichern") {
-        cuelistStub.dl(10).addProgrammerCue(
-            CueAddFromProgrammerRequest.newBuilder().setRequestId(s.nextRequestId()).setCuelistId(cuelistId)
-                .setUserContextId(s.userContextId).setPredicate(all()).setType(type).setIndex(index).build(),
+        if (_content.value.isEmpty()) runCatching { refresh() }
+        if (_content.value.isEmpty()) throw UmbraException("Programmer ist leer – nichts zu speichern")
+        val before = s.cuelists.items.value[cuelistId]?.cuesCount ?: 0
+        for ((name, pred) in predicates()) {
+            cuelistStub.dl(10).addProgrammerCue(
+                CueAddFromProgrammerRequest.newBuilder().setRequestId(s.nextRequestId()).setCuelistId(cuelistId)
+                    .setUserContextId(s.userContextId).setPredicate(pred).setType(type).setIndex(index).build(),
+                s.headers
+            ).requireOk("Cue speichern")
+            if (type != CueAddFromProgrammerRequest.EAddType.ADD) { s.emit(label); return@act }
+            delay(300)
+            runCatching { s.cuelists.load() }
+            val after = s.cuelists.items.value[cuelistId]?.cuesCount ?: 0
+            Diag.note("Cue speichern ($name): Cues vorher $before, nachher $after")
+            if (after > before) { s.emit("$label (Cue ${after})"); return@act }
+        }
+        throw UmbraException("DMXControl hat keinen Cue angelegt (Details unter Diagnose)")
+    }
+
+    /** Neue Cuelist anlegen und den Programmer als ersten Cue darin speichern. */
+    fun createCuelistWithCue(name: String) = act("Cuelist anlegen") {
+        if (_content.value.isEmpty()) throw UmbraException("Programmer ist leer – nichts zu speichern")
+        val known = s.cuelists.items.value.keys.toSet()
+        cuelistStub.dl(10).createCuelist(
+            LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistCreationRequest.newBuilder()
+                .setRequestId(s.nextRequestId()).setCuelistNameTemplate(name).build(),
             s.headers
-        ).requireOk("Cue speichern")
-        s.emit(label)
+        ).requireOk("Cuelist anlegen")
+        delay(300)
+        runCatching { s.cuelists.load() }
+        val created = s.cuelists.items.value.values.firstOrNull { it.id !in known }
+            ?: throw UmbraException("Cuelist angelegt, aber nicht gefunden – bitte unter Cues auswählen")
+        storeToCue(created.id, CueAddFromProgrammerRequest.EAddType.ADD, 0, "Cuelist \"${created.name}\" mit erstem Cue angelegt")
+    }
+
+    /** Einträge eines Presets nach dem Speichern (Presets neu laden). */
+    private suspend fun presetEntries(presetId: String): Int {
+        delay(300)
+        runCatching { s.presets.load() }
+        return s.presets.items.value[presetId]?.entriesCount ?: 0
     }
 
     fun presetMerge(presetId: String, append: Boolean, name: String) = act("Preset") {
-        presetStub.dl(10).mergeAppendProgrammer(
-            PresetMergeAppendRequest.newBuilder().setRequestId(s.nextRequestId()).setUserContextId(s.userContextId)
-                .setPresetId(presetId).setAppend(append).setPredicate(all()).build(),
-            s.headers
-        ).requireOk("Preset")
-        s.emit(if (append) "An $name angehängt" else "In $name zusammengeführt")
+        if (_content.value.isEmpty()) throw UmbraException("Programmer ist leer – nichts zu speichern")
+        val before = s.presets.items.value[presetId]?.entriesCount ?: 0
+        for ((pn, pred) in predicates()) {
+            presetStub.dl(10).mergeAppendProgrammer(
+                PresetMergeAppendRequest.newBuilder().setRequestId(s.nextRequestId()).setUserContextId(s.userContextId)
+                    .setPresetId(presetId).setAppend(append).setPredicate(pred).build(),
+                s.headers
+            ).requireOk("Preset")
+            val after = presetEntries(presetId)
+            Diag.note("Preset ${if (append) "anhängen" else "zusammenführen"} ($pn): Einträge vorher $before, nachher $after")
+            if (after > 0 && (after != before || before > 0)) {
+                s.emit((if (append) "An $name angehängt" else "In $name zusammengeführt") + " – $after Einträge"); return@act
+            }
+        }
+        // Kein Fehler werfen: DMXControl liefert die Einträge in der Preset-Liste evtl. gar nicht mit
+        s.emit("In \"$name\" gespeichert – DMXControl meldet aber keine Einträge (Details unter Diagnose)", isError = true)
     }
 
     fun presetReplace(presetId: String, subtract: Boolean, name: String) = act("Preset") {
+        val pred = predicates().first().second
         suspend fun attempt(deps: DependencyData?) {
             val b = PresetReplaceSubtractRequest.newBuilder().setRequestId(s.nextRequestId()).setUserContextId(s.userContextId)
-                .setPresetId(presetId).setSubtract(subtract).setPredicate(all())
+                .setPresetId(presetId).setSubtract(subtract).setPredicate(pred)
             if (deps != null) b.setDependencies(deps)
             val r = presetStub.dl(15).replaceSubtractProgrammer(b.build(), s.headers)
             when (r.responseCase) {
-                PresetReplaceSubtractResponse.ResponseCase.PROCESSEDPRESETID -> s.emit(if (subtract) "Aus $name entfernt" else "$name ersetzt")
+                PresetReplaceSubtractResponse.ResponseCase.PROCESSEDPRESETID -> {
+                    val n = presetEntries(presetId)
+                    s.emit((if (subtract) "Aus $name entfernt" else "$name ersetzt") + " – $n Einträge")
+                }
                 PresetReplaceSubtractResponse.ResponseCase.DEPENDENCIES ->
                     _pending.value = PendingDependencies("$name ${if (subtract) "abziehen" else "ersetzen"}", r.dependencies) { attempt(it) }
                 else -> throw UmbraException(r.error.ifBlank { "DMXControl hat das Preset nicht geändert" })
@@ -233,12 +300,17 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
     }
 
     fun createPreset(name: String, propertyPreset: Boolean) = act("Preset anlegen") {
+        if (_content.value.isEmpty()) throw UmbraException("Programmer ist leer – nichts zu speichern")
         presetStub.dl(10).createPreset(
             PresetCreationRequest.newBuilder().setRequestId(s.nextRequestId()).setUserContextId(s.userContextId)
-                .setPredicate(all()).setPropertyPreset(propertyPreset).setPresetNameTemplate(name).build(),
+                .setPredicate(predicates().first().second).setPropertyPreset(propertyPreset).setPresetNameTemplate(name).build(),
             s.headers
         ).requireOk("Preset anlegen")
-        s.emit("Preset \"$name\" angelegt")
+        delay(300)
+        runCatching { s.presets.load() }
+        val p = s.presets.items.value.values.filter { it.name.startsWith(name) }.maxByOrNull { it.entriesCount }
+        Diag.note("Preset anlegen: \"${p?.name}\" mit ${p?.entriesCount} Einträgen")
+        s.emit("Preset \"${p?.name ?: name}\" angelegt" + (p?.let { " – ${it.entriesCount} Einträge" } ?: ""))
     }
 
     /** Rückfrage beantworten: gewählte Lösungen eintragen und erneut speichern. */

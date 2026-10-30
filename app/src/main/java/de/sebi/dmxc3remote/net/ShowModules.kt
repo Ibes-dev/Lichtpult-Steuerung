@@ -23,6 +23,7 @@ import LumosProtobuf.MainSwitchServiceTypes.MainSwitchSetRequest
 import LumosProtobuf.Master.MasterServiceCRUDTypes.MasterActionRequest
 import LumosProtobuf.Master.MasterServiceCRUDTypes.SetMasterValueRequest
 import LumosProtobuf.Master.MasterServiceTypes.MasterDescriptor
+import LumosProtobuf.Master.MasterServiceTypes.MasterButtonDescriptor
 import LumosProtobuf.Master.MasterServiceTypes.MasterFaderDescriptor
 import LumosProtobuf.Timecode.TimecodeServiceCRUDTypes.ETimecodeAction
 import LumosProtobuf.Timecode.TimecodeServiceCRUDTypes.TimecodeActionRequest
@@ -146,27 +147,114 @@ class MasterModule(s: UmbraSession) : Module(s, "Master") {
     }
 
     /**
-     * UNVERIFIZIERT: Welcher Eintrag der faders-Map den Hauptfader meint, ist nicht dokumentiert.
-     * Es wird der erste Eintrag verwendet (Name aus dem Descriptor, sonst Map-Key).
+     * Welcher Eintrag der faders-Map den Hauptfader meint und ob DMXControl "absolut" oder "increment"
+     * erwartet, ist nicht dokumentiert. DMXControl bestätigt Befehle auch dann, wenn es sie nicht umsetzt.
+     * Deshalb: Varianten der Reihe nach senden, am gemeldeten Masterwert prüfen, ob er sich bewegt,
+     * und die funktionierende Variante merken.
      */
-    fun setFader(master: MasterDescriptor, value: Double) = s.throttler.submit("master:${master.masterId}") {
-        val entry = master.fadersMap.entries.firstOrNull()
-        val name = if (entry == null) "" else entry.value.name.ifBlank { entry.key }
+    private data class FaderWay(val name: String, val increment: Boolean, val label: String)
+
+    @Volatile private var faderWay: FaderWay? = null
+    @Volatile private var probing = false
+
+    private fun valueOf(m: MasterDescriptor?): Double? = when (m?.masterValueCase) {
+        MasterDescriptor.MasterValueCase.INTENSITY -> m.intensity
+        MasterDescriptor.MasterValueCase.PARAMETER -> m.parameter
+        MasterDescriptor.MasterValueCase.SPEED -> m.speed
+        else -> null
+    }
+
+    private fun ways(master: MasterDescriptor, preferred: String = "Master"): List<FaderWay> {
+        val names = buildList {
+            master.fadersMap.forEach { (k, v) -> if (k.equals(preferred, true) || v.name.equals(preferred, true)) { add(v.name.ifBlank { k }); add(k) } }
+            master.fadersMap.forEach { (k, v) -> add(k); if (v.name.isNotBlank()) add(v.name) }
+            add(preferred)
+            add("")
+        }.distinct()
+        return names.map { FaderWay(it, false, "absolut \"$it\"") } + names.map { FaderWay(it, true, "increment \"$it\"") }
+    }
+
+    private suspend fun send(master: MasterDescriptor, way: FaderWay, target: Double) {
+        val cur = valueOf(_items.value[master.masterId]) ?: 0.0
+        val f = MasterFaderDescriptor.newBuilder().setMasterId(master.masterId).setName(way.name)
+        if (way.increment) f.setIncrement(target - cur) else f.setAbsolut(target)
         stub.dl(3).setMasterValue(
             SetMasterValueRequest.newBuilder()
                 .setRequestId(s.nextRequestId())
                 .setMasterId(master.masterId)
                 .setUserContextId(s.userContextId)
-                .setFader(
-                    MasterFaderDescriptor.newBuilder()
-                        .setMasterId(master.masterId)
-                        .setName(name)
-                        .setAbsolut(value.coerceIn(0.0, 1.0))
-                        .build()
-                )
+                .setFader(f)
                 .build(),
             s.headers
         ).requireOk("SetMasterValue")
+    }
+
+    /**
+     * Weiterer Regler eines Masters über seinen Namen (Pan, Tilt, Hue …), Wert 0..1.
+     * UNVERIFIZIERT: Wertebereich der Nicht-Intensitäts-Regler.
+     */
+    fun setNamedFader(master: MasterDescriptor, name: String, value: Double) = s.throttler.submit("master:${master.masterId}:$name") {
+        stub.dl(3).setMasterValue(
+            SetMasterValueRequest.newBuilder()
+                .setRequestId(s.nextRequestId())
+                .setMasterId(master.masterId)
+                .setUserContextId(s.userContextId)
+                .setFader(MasterFaderDescriptor.newBuilder().setMasterId(master.masterId).setName(name).setAbsolut(value.coerceIn(0.0, 1.0)))
+                .build(),
+            s.headers
+        ).requireOk("SetMasterValue $name")
+    }
+
+    /**
+     * Taste eines Masters (Flash, Stomp, Select, Fix, Max, Zero, Red …) wie eine Hardware-Taste:
+     * Drücken = an, Loslassen = aus. DMXControl entscheidet, ob die Taste rastet.
+     */
+    fun button(master: MasterDescriptor, name: String, down: Boolean) = act("Master $name") {
+        stub.dl(3).setMasterValue(
+            SetMasterValueRequest.newBuilder()
+                .setRequestId(s.nextRequestId())
+                .setMasterId(master.masterId)
+                .setUserContextId(s.userContextId)
+                .setButton(MasterButtonDescriptor.newBuilder().setMasterId(master.masterId).setName(name).setButtonValue(down))
+                .build(),
+            s.headers
+        ).requireOk("Master $name")
+    }
+
+    fun setFader(master: MasterDescriptor, value: Double) = s.throttler.submit("master:${master.masterId}") {
+        val target = value.coerceIn(0.0, 1.0)
+        val known = faderWay
+        if (known != null) { send(master, known, target); return@submit }
+        if (probing) return@submit
+        // Erkennung nur mit spürbarer Änderung, sonst ist "keine Wirkung" nicht von "schon dort" zu unterscheiden
+        valueOf(_items.value[master.masterId])?.let { if (kotlin.math.abs(it - target) < 0.03) return@submit }
+        probing = true
+        try {
+            Diag.note("Master ${master.name}: Fader-Einträge " + master.fadersMap.entries.joinToString { "${it.key}=\"${it.value.name}\"" }.ifBlank { "keine" })
+            for (way in ways(master)) {
+                val before = valueOf(_items.value[master.masterId])
+                val r = runCatching { send(master, way, target) }
+                if (r.isFailure) { Diag.note("Master-Fader ${way.label}: abgelehnt: ${r.exceptionOrNull()?.message}"); continue }
+                // Rückmeldung über den Änderungs-Stream abwarten
+                var moved = false
+                for (i in 0 until 8) {
+                    delay(60)
+                    val now = valueOf(_items.value[master.masterId])
+                    if (now != null && (before == null || kotlin.math.abs(now - before) > 0.005) && kotlin.math.abs(now - target) < 0.05) { moved = true; break }
+                }
+                if (!moved) {
+                    // Stream meldet evtl. nicht: direkt nachfragen
+                    runCatching { load() }
+                    val now = valueOf(_items.value[master.masterId])
+                    moved = now != null && kotlin.math.abs(now - target) < 0.05
+                }
+                Diag.note("Master-Fader ${way.label}: ${if (moved) "wirkt" else "keine Wirkung"}")
+                if (moved) { faderWay = way; return@submit }
+            }
+            s.emit("Master: DMXControl setzt den Fader nicht (Details unter Diagnose)", isError = true)
+        } finally {
+            probing = false
+        }
     }
 }
 
@@ -370,19 +458,79 @@ class CuelistModule(s: UmbraSession) : Module(s, "Cuelists") {
         else -> cueIndex
     }
 
+    // ================================================================ Cues bearbeiten
+    private val cueStub by lazy { LumosProtobufClient.CueClientGrpcKt.CueClientCoroutineStub(s.channel) }
+
+    /**
+     * "parentContainerId" ist nicht dokumentiert: Cue-eigener Wert, Cuelist-ID oder leer. Die App
+     * probiert der Reihe nach, prüft das Ergebnis an der neu geladenen Cuelist und merkt sich,
+     * was wirkt.
+     */
+    @Volatile private var containerMode: Int? = null
+
+    private fun containers(cuelistId: String, cueId: String): List<Pair<Int, String>> {
+        val cue = _items.value[cuelistId]?.cuesList?.firstOrNull { it.cueId == cueId }
+        val all = listOf(0 to (cue?.parentContainerId ?: ""), 1 to cuelistId, 2 to "")
+            .filter { it.first != 0 || it.second.isNotBlank() }.distinctBy { it.second }
+        return containerMode?.let { m -> all.sortedBy { if (it.first == m) 0 else 1 } } ?: all
+    }
+
+    private suspend fun cueOp(
+        what: String, cuelistId: String, cueId: String,
+        send: suspend (container: String) -> LumosProtobuf.CommonTypes.ConfirmedResponse,
+        check: (LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistDescriptor?) -> Boolean
+    ) {
+        var last = ""
+        for ((mode, container) in containers(cuelistId, cueId)) {
+            val r = runCatching { send(container) }.getOrNull()
+            if (r == null || !r.ok) { last = r?.message?.text().orEmpty(); Diag.note("$what (Container $mode): abgelehnt $last"); continue }
+            delay(250)
+            runCatching { load() }
+            if (check(_items.value[cuelistId])) { containerMode = mode; return }
+            Diag.note("$what (Container $mode): angenommen, aber ohne Wirkung")
+        }
+        throw UmbraException("$what: DMXControl hat es nicht übernommen" + (last.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""))
+    }
+
     /** Cue umbenennen (CueClient.SetCueValue, Feld name). */
     fun renameCue(cuelistId: String, cueId: String, name: String) = act("Cue umbenennen") {
-        val cue = _items.value[cuelistId]?.cuesList?.firstOrNull { it.cueId == cueId }
-        LumosProtobufClient.CueClientGrpcKt.CueClientCoroutineStub(s.channel).dl(5).setCueValue(
-            LumosProtobuf.Cue.CueServiceTypes.SetCueValueRequest.newBuilder()
-                .setRequestId(s.nextRequestId())
-                .setCueId(cueId)
-                .setParentContainerId(cue?.parentContainerId?.ifBlank { null } ?: cuelistId)
-                .setName(name)
-                .build(),
-            s.headers
-        ).requireOk("Cue umbenennen")
+        cueOp("Cue umbenennen", cuelistId, cueId,
+            { c ->
+                cueStub.dl(5).setCueValue(
+                    LumosProtobuf.Cue.CueServiceTypes.SetCueValueRequest.newBuilder()
+                        .setRequestId(s.nextRequestId()).setCueId(cueId).setParentContainerId(c).setName(name).build(),
+                    s.headers
+                )
+            },
+            { cl -> cl?.cuesList?.firstOrNull { it.cueId == cueId }?.name == name })
         s.emit("Cue umbenannt in \"$name\"")
+    }
+
+    /** Cue löschen (CueClient.DeleteCue). */
+    fun deleteCue(cuelistId: String, cueId: String, label: String) = act("Cue löschen") {
+        cueOp("Cue löschen", cuelistId, cueId,
+            { c ->
+                cueStub.dl(5).deleteCue(
+                    LumosProtobuf.Cue.CueServiceTypes.CueDeletionRequest.newBuilder()
+                        .setRequestId(s.nextRequestId()).setParentContainerId(c).setCueId(cueId).build(),
+                    s.headers
+                )
+            },
+            { cl -> cl != null && cl.cuesList.none { it.cueId == cueId } })
+        s.emit("$label gelöscht")
+    }
+
+    /** Cue an eine andere Position schieben (CueClient.MoveCue, Ziel = Position in der Liste). */
+    fun moveCue(cuelistId: String, cueId: String, targetPos: Int) = act("Cue verschieben") {
+        cueOp("Cue verschieben", cuelistId, cueId,
+            { c ->
+                cueStub.dl(5).moveCue(
+                    LumosProtobuf.Cue.CueServiceTypes.CueMoveRequest.newBuilder()
+                        .setRequestId(s.nextRequestId()).setParentContainerId(c).setCueId(cueId).setTargetIndex(targetPos).build(),
+                    s.headers
+                )
+            },
+            { cl -> cl?.cuesList?.sortedBy { it.cueIndex }?.indexOfFirst { it.cueId == cueId } == targetPos })
     }
 
     /**
@@ -405,6 +553,9 @@ class CuelistModule(s: UmbraSession) : Module(s, "Cuelists") {
                 .setValue(LumosProtobuf.CommonTypes.ObjectData.newBuilder().setStringValue(name)).build(),
             s.headers
         ).requireOk("Cuelist umbenennen")
+        delay(250)
+        runCatching { load() }
+        if (_items.value[cuelistId]?.name != name) throw UmbraException("Cuelist umbenennen: DMXControl hat den Namen nicht übernommen")
         s.emit("Cuelist umbenannt in \"$name\"")
     }
 
@@ -449,6 +600,16 @@ class CuelistModule(s: UmbraSession) : Module(s, "Cuelists") {
     fun load(id: String, pos: Int) {
         val cue = cuesOf(id).getOrNull(pos) ?: return
         action(id, CuelistActionRequest.EAction.LOAD, indexFor(indexMode ?: 0, pos, cue.cueIndex))
+    }
+
+    /** Neue Cuelist anlegen, optional als Kopie einer bestehenden (CuelistClient.CreateCuelist). */
+    fun createCuelist(name: String, copyFrom: String? = null) = act("Cuelist anlegen") {
+        val b = LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistCreationRequest.newBuilder()
+            .setRequestId(s.nextRequestId()).setCuelistNameTemplate(name)
+        if (copyFrom != null) b.setCopyFromCuelist(copyFrom)
+        stub.dl(10).createCuelist(b.build(), s.headers).requireOk("Cuelist anlegen")
+        load()
+        s.emit(if (copyFrom != null) "Kopie \"$name\" angelegt" else "Cuelist \"$name\" angelegt")
     }
 
     fun stopAll() = act("Alle Cuelists stoppen") {

@@ -28,6 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Undo
@@ -258,7 +260,8 @@ private fun PresetsTab(s: UmbraSession, blindLoad: Boolean, onBlind: (Boolean) -
                 ) {
                     Text(pr.name.ifBlank { "Preset" }, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        (if (pr.isPropertyPreset) "Eigenschafts-Preset" else "Universal-Preset") + " · ${pr.entriesCount} Einträge",
+                        (if (pr.isPropertyPreset) "Eigenschafts-Preset" else "Universal-Preset") +
+                            if (pr.entriesCount > 0) " · ${pr.entriesCount} Einträge" else "",
                         style = MaterialTheme.typography.labelSmall, color = Desk.TextDim
                     )
                     Row(Modifier.horizontalScroll(rememberScrollState())) {
@@ -317,6 +320,8 @@ private fun CuesTab(s: UmbraSession, blindLoad: Boolean, onBlind: (Boolean) -> U
     val cl = listId?.let { lists[it] } ?: sorted.firstOrNull()
     var renameCue by remember { mutableStateOf<Pair<String, String>?>(null) }
     var renameList by remember { mutableStateOf(false) }
+    var newList by remember { mutableStateOf(false) }
+    var deleteCue by remember { mutableStateOf<Triple<String, String, String>?>(null) }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             CompactSearch(q, { q = it }, "Cuelist suchen", Modifier.weight(1f))
@@ -343,6 +348,7 @@ private fun CuesTab(s: UmbraSession, blindLoad: Boolean, onBlind: (Boolean) -> U
                 modifier = Modifier.weight(1f)
             ) { Text("Als neuen Cue anhängen", maxLines = 1) }
             OutlinedButton(onClick = { renameList = true }) { Text("Umbenennen") }
+            OutlinedButton(onClick = { newList = true }) { Text("Neu") }
         }
         LazyColumn(
             Modifier.fillMaxSize(),
@@ -361,10 +367,18 @@ private fun CuesTab(s: UmbraSession, blindLoad: Boolean, onBlind: (Boolean) -> U
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(nr, style = MaterialTheme.typography.labelLarge.merge(Numeric), modifier = Modifier.width(44.dp))
                         Text(c.name.ifBlank { "Cue $nr" }, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        // Reihenfolge ändern
+                        IconButton(onClick = { s.cuelists.moveCue(cl.id, c.cueId, pos - 1) }, enabled = pos > 0, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "nach oben", tint = if (pos > 0) Desk.TextDim else Desk.Line)
+                        }
+                        IconButton(onClick = { s.cuelists.moveCue(cl.id, c.cueId, pos + 1) }, enabled = pos < cues.lastIndex, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "nach unten", tint = if (pos < cues.lastIndex) Desk.TextDim else Desk.Line)
+                        }
                     }
                     Row(Modifier.horizontalScroll(rememberScrollState())) {
                         TextButton(onClick = { s.programmer.loadCue(cl.id, c.cueId, "$label (${cl.name})", blindLoad) }) { Text("Bearbeiten") }
                         TextButton(onClick = { renameCue = c.cueId to c.name }) { Text("Umbenennen") }
+                        TextButton(onClick = { deleteCue = Triple(c.cueId, label, cl.id) }) { Text("Löschen", color = Desk.Red) }
                         TextButton(
                             onClick = { s.programmer.storeToCue(cl.id, CueAddFromProgrammerRequest.EAddType.REPLACE, s.cuelists.indexOf(cl.id, pos), "$label ersetzt") },
                             enabled = content.isNotEmpty()
@@ -379,6 +393,16 @@ private fun CuesTab(s: UmbraSession, blindLoad: Boolean, onBlind: (Boolean) -> U
         }
     }
     val clNow = cl
+    deleteCue?.let { (id, label, listId) ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { deleteCue = null },
+            title = { Text("$label löschen?") },
+            text = { Text("Der Cue wird in DMXControl gelöscht.") },
+            confirmButton = { TextButton(onClick = { s.cuelists.deleteCue(listId, id, label); deleteCue = null }) { Text("Löschen", color = Desk.Red) } },
+            dismissButton = { TextButton(onClick = { deleteCue = null }) { Text("Abbrechen") } }
+        )
+    }
+    if (newList) NewCuelistDialog(clNow?.let { it.id to it.name }, { name, copy -> s.cuelists.createCuelist(name, copy); newList = false }) { newList = false }
     if (renameList && clNow != null) RenameDialog("Cuelist umbenennen", clNow.name, { s.cuelists.renameCuelist(clNow.id, it); renameList = false }) { renameList = false }
     renameCue?.let { (id, name) ->
         if (clNow != null) RenameDialog("Cue umbenennen", name, { s.cuelists.renameCue(clNow.id, id, it); renameCue = null }) { renameCue = null }
@@ -388,52 +412,86 @@ private fun CuesTab(s: UmbraSession, blindLoad: Boolean, onBlind: (Boolean) -> U
 // ============================================================== Speichern
 @Composable
 private fun SaveDialog(s: UmbraSession, origin: ProgOrigin?, onClose: () -> Unit) {
-    var step by remember { mutableStateOf(0) }       // 0 Auswahl, 1 neues Preset
+    var step by remember { mutableStateOf(0) }       // 0 Auswahl, 1 neues Preset, 2 Cuelist wählen, 3 neue Cuelist
     var clearAfter by remember { mutableStateOf(true) }
     var name by remember { mutableStateOf("Neues Preset") }
     var propertyPreset by remember { mutableStateOf(false) }
-    AlertDialog(
+    var q by remember { mutableStateOf("") }
+    val lists by s.cuelists.items.collectAsStateWithLifecycle()
+    androidx.compose.material3.AlertDialog(
         onDismissRequest = onClose,
-        title = { Text(if (step == 0) "Programmer speichern" else "Neues Preset") },
+        title = {
+            Text(when (step) { 1 -> "Neues Preset"; 2 -> "In Cuelist speichern"; 3 -> "Neue Cuelist"; else -> "Programmer speichern" })
+        },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (step == 0) {
-                    if (origin != null) {
-                        OptionList(listOf(Triple("Zurück in ${origin.label}", "Änderungen in den geladenen ${if (origin is ProgOrigin.Cue) "Cue" else "Preset"} schreiben") {
-                            s.programmer.storeToOrigin(clearAfter); onClose()
-                        }))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Danach Programmer leeren", modifier = Modifier.weight(1f))
-                            Switch(checked = clearAfter, onCheckedChange = { clearAfter = it })
+                when (step) {
+                    0 -> {
+                        if (origin != null) {
+                            OptionList(listOf(Triple("Zurück in ${origin.label}", "Änderungen in den geladenen ${if (origin is ProgOrigin.Cue) "Cue" else "Preset"} schreiben") {
+                                s.programmer.storeToOrigin(clearAfter); onClose()
+                            }))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Danach Programmer leeren", modifier = Modifier.weight(1f))
+                                Switch(checked = clearAfter, onCheckedChange = { clearAfter = it })
+                            }
+                            HorizontalDivider(color = Desk.Line)
                         }
-                        HorizontalDivider(color = Desk.Line)
+                        OptionList(listOf(
+                            Triple("In Cuelist", "Als neuen Cue an eine Cuelist anhängen – oder neue Cuelist anlegen") { step = 2 },
+                            Triple("Als neues Preset", "Programmer-Inhalt als eigenes Preset anlegen") { step = 1 }
+                        ))
+                        Text(
+                            "Einen bestimmten Cue ersetzen oder ein bestehendes Preset ändern: unter \"Cues\" bzw. \"Presets\".",
+                            style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+                        )
                     }
-                    OptionList(listOf(
-                        Triple("Als neues Preset", "Programmer-Inhalt als eigenes Preset anlegen") { step = 1 }
-                    ))
-                    Text(
-                        "In einen bestimmten Cue oder ein bestehendes Preset speichern: unter \"Cues\" bzw. \"Presets\".",
-                        style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
-                    )
-                } else {
-                    OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FilterChip(selected = !propertyPreset, onClick = { propertyPreset = false }, label = { Text("Universal") })
-                        FilterChip(selected = propertyPreset, onClick = { propertyPreset = true }, label = { Text("Eigenschaft") })
+                    1 -> {
+                        OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            FilterChip(selected = !propertyPreset, onClick = { propertyPreset = false }, label = { Text("Universal") })
+                            FilterChip(selected = propertyPreset, onClick = { propertyPreset = true }, label = { Text("Eigenschaft") })
+                        }
+                        Text(
+                            if (propertyPreset) "Eigenschafts-Preset: speichert nur die Eigenschaften und lässt sich auf andere Gruppen anwenden."
+                            else "Universal-Preset: speichert Werte samt Geräten.",
+                            style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+                        )
                     }
-                    Text(
-                        if (propertyPreset) "Eigenschafts-Preset: speichert nur die Eigenschaften und lässt sich auf andere Gruppen anwenden."
-                        else "Universal-Preset: speichert Werte samt Geräten.",
-                        style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
-                    )
+                    2 -> {
+                        CompactSearch(q, { q = it }, "Cuelist suchen", Modifier.fillMaxWidth())
+                        OptionList(listOf(Triple("+ Neue Cuelist", "Cuelist anlegen und den Programmer als ersten Cue speichern") { name = "Neue Cuelist"; step = 3 }))
+                        lists.values.filter { q.isBlank() || it.name.contains(q.trim(), true) || it.number.toString() == q.trim() }
+                            .sortedBy { it.number }.forEach { cl ->
+                                Row(
+                                    Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Desk.Raised)
+                                        .clickable {
+                                            s.programmer.storeToCue(cl.id, CueAddFromProgrammerRequest.EAddType.ADD, cl.cuesCount, "Neuer Cue in ${cl.name}")
+                                            onClose()
+                                        }.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("${cl.number}", style = MaterialTheme.typography.labelLarge.merge(Numeric), modifier = Modifier.width(40.dp))
+                                    Text(cl.name.ifBlank { "Cuelist ${cl.number}" }, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("${cl.cuesCount} Cues", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
+                                }
+                            }
+                    }
+                    else -> {
+                        OutlinedTextField(name, { name = it }, label = { Text("Name der Cuelist") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Text("Die Cuelist wird angelegt und der Programmer als erster Cue gespeichert.", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+                    }
                 }
             }
         },
         confirmButton = {
-            if (step == 1) TextButton(enabled = name.isNotBlank(), onClick = { s.programmer.createPreset(name.trim(), propertyPreset); onClose() }) { Text("Anlegen") }
-            else TextButton(onClick = onClose) { Text("Abbrechen") }
+            when (step) {
+                1 -> TextButton(enabled = name.isNotBlank(), onClick = { s.programmer.createPreset(name.trim(), propertyPreset); onClose() }) { Text("Anlegen") }
+                3 -> TextButton(enabled = name.isNotBlank(), onClick = { s.programmer.createCuelistWithCue(name.trim()); onClose() }) { Text("Anlegen") }
+                else -> TextButton(onClick = onClose) { Text("Abbrechen") }
+            }
         },
-        dismissButton = { if (step == 1) TextButton(onClick = { step = 0 }) { Text("Zurück") } }
+        dismissButton = { if (step != 0) TextButton(onClick = { step = if (step == 3) 2 else 0 }) { Text("Zurück") } }
     )
 }
 

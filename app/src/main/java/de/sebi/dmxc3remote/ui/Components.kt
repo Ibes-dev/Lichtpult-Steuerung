@@ -263,3 +263,34 @@ fun SmallTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, modi
         }
     }
 }
+
+/**
+ * Neue Cuelist anlegen: Name, optional als Kopie der übergebenen Cuelist (mit allen Cues).
+ */
+@Composable
+fun NewCuelistDialog(
+    copyOf: Pair<String, String>?,
+    onCreate: (name: String, copyFrom: String?) -> Unit,
+    initialCopy: Boolean = false,
+    onDismiss: () -> Unit
+) {
+    var name by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(if (initialCopy && copyOf != null) "${copyOf.second} Kopie" else "Neue Cuelist") }
+    var copy by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(initialCopy && copyOf != null) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (copy) "Cuelist kopieren" else "Neue Cuelist") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.OutlinedTextField(name, { name = it }, singleLine = true, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
+                if (copyOf != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Als Kopie von „${copyOf.second}“", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    androidx.compose.material3.Switch(checked = copy, onCheckedChange = { copy = it })
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(enabled = name.isNotBlank(), onClick = { onCreate(name.trim(), if (copy) copyOf?.first else null) }) { Text("Anlegen") }
+        },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Abbrechen") } }
+    )
+}

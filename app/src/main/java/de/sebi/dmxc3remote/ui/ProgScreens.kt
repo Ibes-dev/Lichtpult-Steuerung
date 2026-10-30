@@ -450,7 +450,7 @@ private fun PanelFrame(title: String, content: @Composable () -> Unit) {
 @Composable
 private fun RowSlider(v: Float, range: ClosedFloatingPointRange<Float>, text: String, onChange: (Float) -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Slider(v.coerceIn(range.start, range.endInclusive), onChange, Modifier.weight(1f).height(36.dp), valueRange = range)
+        DeskSlider(v.coerceIn(range.start, range.endInclusive), onChange, range, Modifier.weight(1f))
         Text(
             text, style = MaterialTheme.typography.labelMedium.merge(Numeric), color = Desk.TextDim,
             maxLines = 1, modifier = Modifier.width(52.dp).padding(start = 6.dp)
@@ -505,15 +505,16 @@ private fun ColorDetail(key: String, p: DevicePropertyDescriptor, send: (Double,
     listOf("R" to Color(0xFFE5484D), "G" to Color(0xFF5BD18B), "B" to Color(0xFF4C8DE5)).forEachIndexed { i, (n, col) ->
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(n, style = MaterialTheme.typography.labelMedium, color = col, modifier = Modifier.width(16.dp))
-            Slider(
+            DeskSlider(
                 rgb[i],
                 { nv ->
                     val next = rgb.toMutableList().also { it[i] = nv }
                     localValues[key] = next
                     send(next[0] * max, next[1] * max, next[2] * max)
                 },
-                Modifier.weight(1f).height(32.dp),
-                colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = col, activeTrackColor = col)
+                0f..1f,
+                Modifier.weight(1f),
+                accent = col
             )
             Text("%.0f".format(rgb[i] * 100), style = MaterialTheme.typography.labelSmall.merge(Numeric), color = Desk.TextDim, modifier = Modifier.width(32.dp))
         }
@@ -631,12 +632,12 @@ private fun FanControl(s: UmbraSession, g: DeviceGroupDescriptor, p: DevicePrope
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Start", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(48.dp))
-            Slider(from, { from = it; send() }, Modifier.weight(1f), valueRange = range.start.toFloat()..range.endInclusive.toFloat())
+            DeskSlider(from, { from = it; send() }, range.start.toFloat()..range.endInclusive.toFloat(), Modifier.weight(1f))
             Text("%.2f".format(from), style = MaterialTheme.typography.labelSmall.merge(Numeric), modifier = Modifier.width(48.dp))
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Ende", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(48.dp))
-            Slider(to, { to = it; send() }, Modifier.weight(1f), valueRange = range.start.toFloat()..range.endInclusive.toFloat())
+            DeskSlider(to, { to = it; send() }, range.start.toFloat()..range.endInclusive.toFloat(), Modifier.weight(1f))
             Text("%.2f".format(to), style = MaterialTheme.typography.labelSmall.merge(Numeric), modifier = Modifier.width(48.dp))
         }
         Text("Mehrere Gruppen", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim)

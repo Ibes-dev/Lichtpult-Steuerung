@@ -232,6 +232,8 @@ private fun ControlSettings(s: UmbraSession, vm: AppViewModel) {
     val last by vm.midi.last.collectAsStateWithLifecycle()
     val volume by vm.volumeKeysGo.collectAsStateWithLifecycle()
     val compactCl by vm.cuelistCompact.collectAsStateWithLifecycle()
+    val compactMs by vm.masterCompact.collectAsStateWithLifecycle()
+    val view3d by vm.stage3d.view.collectAsStateWithLifecycle()
     val goId by vm.goCuelistId.collectAsStateWithLifecycle()
     val cuelists by s.cuelists.items.collectAsStateWithLifecycle()
     Column(
@@ -245,6 +247,24 @@ private fun ControlSettings(s: UmbraSession, vm: AppViewModel) {
                     Text("Schlanke Zeilen statt Karten, sinnvoll bei vielen Cuelists", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
                 }
                 Switch(checked = compactCl, onCheckedChange = vm::setCuelistCompact)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Master kompakt anzeigen")
+                    Text("Nur Regler und Flash, mehr Master nebeneinander", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+                }
+                Switch(checked = compactMs, onCheckedChange = vm::setMasterCompact)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("3D-Bühne: StageView als Frontansicht")
+                    Text(
+                        if (view3d.front) "StageView von vorn gezeichnet: oben = hoch, Tiefe je Gerät einstellbar"
+                        else "StageView von oben gezeichnet: oben = hinten, Höhe je Gerät einstellbar",
+                        style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+                    )
+                }
+                Switch(checked = view3d.front, onCheckedChange = { vm.stage3d.setView(view3d.copy(front = it)) })
             }
         }
         Section("Externe Tasten") {

@@ -170,7 +170,7 @@ fun ParamEditor(
                 FanParamRow(p, fan, operators, spec, local, onFan)
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Slider(local, { local = it; onNumber(it.toDouble()) }, Modifier.weight(1f).height(36.dp), valueRange = spec.min..spec.max)
+                    DeskSlider(local, { local = it; onNumber(it.toDouble()) }, spec.min..spec.max, Modifier.weight(1f))
                     Text(spec.fmt.format(local), style = MaterialTheme.typography.labelMedium.merge(Numeric), color = Desk.TextDim, modifier = Modifier.width(64.dp).padding(start = 6.dp))
                 }
             }
@@ -197,7 +197,7 @@ private fun FanParamRow(
         listOf("Start" to from, "Ende" to to).forEachIndexed { i, (n, value) ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(n, style = MaterialTheme.typography.labelMedium, color = Desk.TextDim, modifier = Modifier.width(44.dp))
-                Slider(value, { if (i == 0) from = it else to = it }, Modifier.weight(1f).height(32.dp), valueRange = spec.min..spec.max)
+                DeskSlider(value, { if (i == 0) from = it else to = it }, spec.min..spec.max, Modifier.weight(1f))
                 Text(spec.fmt.format(value), style = MaterialTheme.typography.labelSmall.merge(Numeric), color = Desk.TextDim, modifier = Modifier.width(64.dp).padding(start = 6.dp))
             }
         }
@@ -251,10 +251,11 @@ private fun ParamEditorBody(p: DevParam, label: String, onSet: (ObjectData) -> U
                         Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
                         Text("%.2f".format(local), style = MaterialTheme.typography.labelMedium.merge(Numeric))
                     }
-                    Slider(
+                    DeskSlider(
                         local.coerceIn(lo.toFloat(), hi.toFloat()),
                         { local = it; onSet(sameType(v, it.toDouble())) },
-                        valueRange = lo.toFloat()..hi.toFloat()
+                        lo.toFloat()..hi.toFloat(),
+                        Modifier.fillMaxWidth()
                     )
                 }
             } else {
