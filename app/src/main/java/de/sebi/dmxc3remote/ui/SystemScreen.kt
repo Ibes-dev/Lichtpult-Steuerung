@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -160,6 +161,7 @@ private fun Hardware(s: UmbraSession) {
     val m = s.system
     val err by m.error.collectAsStateWithLifecycle()
     val interfaces by m.interfaces.collectAsStateWithLifecycle()
+    var commentFor by remember { mutableStateOf<String?>(null) }
     val plugins by m.plugins.collectAsStateWithLifecycle()
     val rdm by m.rdm.collectAsStateWithLifecycle()
     val power by m.power.collectAsStateWithLifecycle()
@@ -171,20 +173,38 @@ private fun Hardware(s: UmbraSession) {
     ) {
         ModuleError(err)
         TextButton(onClick = m::reload) { Text("Hardware neu einlesen") }
+        commentFor?.let { id ->
+            val st = interfaces[id]
+            val port = st?.meta?.interfaceData?.portMetadataList?.firstOrNull()?.port ?: 0
+            RenameDialog("Kommentar (wie in DMXControl)", st?.comments?.get(port) ?: "", { c -> m.setComment(id, port, c); commentFor = null }) { commentFor = null }
+        }
         Section("DMX-Interfaces") {
             if (interfaces.isEmpty()) Text("Keine Interfaces in Verwendung.", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
             interfaces.values.forEach { st ->
                 val d = st.meta.interfaceData
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
+                    Column(Modifier.weight(1f).clickableNoRipple { commentFor = d.interfaceId }) {
                         Text("${d.vendor} ${d.model}".trim().ifBlank { d.interfaceId })
+                        // Kommentar aus DMXControl, um gleiche Interfaces zu unterscheiden
+                        if (st.comments.isNotEmpty()) Text(
+                            st.comments.entries.sortedBy { it.key }.joinToString(" · ") { (port, c) ->
+                                if (st.comments.size > 1 || d.portMetadataCount > 1) "Port ${port + 1}: $c" else c
+                            },
+                            style = MaterialTheme.typography.bodyMedium, color = Desk.Amber
+                        )
                         Text(
                             listOfNotNull(
+                                d.genericInstanceNumber.takeIf { d.genericInstanceNumberSet }?.let { "Instanz $it" },
                                 d.serialNr.ifBlank { null }?.let { "Seriennr. $it" },
                                 if (st.meta.available) "angeschlossen" else "nicht gefunden",
                                 st.working?.let { if (it) "sendet" else "gestört" }
                             ).joinToString(", "),
                             style = MaterialTheme.typography.bodySmall
+                        )
+                        // weitere Angaben aus DMXControl (z. B. IP-Adresse), falls vorhanden
+                        if (st.meta.additionalMetadataCount > 0) Text(
+                            st.meta.additionalMetadataMap.entries.joinToString(" · ") { "${it.key}: ${it.value}" },
+                            style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, maxLines = 2
                         )
                     }
                     Switch(checked = st.enabled == true, onCheckedChange = { m.setInterfaceEnabled(d.interfaceId, it) })

@@ -198,7 +198,11 @@ class DmxModule(s: UmbraSession) : Module(s, "DMX-Monitor") {
 }
 
 // ============================================================== System
-data class InterfaceState(val meta: LumosExtendedDMXInterfaceMetadata, val enabled: Boolean?, val working: Boolean?)
+data class InterfaceState(
+    val meta: LumosExtendedDMXInterfaceMetadata, val enabled: Boolean?, val working: Boolean?,
+    /** Kommentar je Port aus DMXControl (DMXInterfaceManagementClient.GetComment). */
+    val comments: Map<Int, String> = emptyMap()
+)
 
 class SystemModule(s: UmbraSession) : Module(s, "System") {
     private val pluginStub = PluginManagementClientCoroutineStub(s.channel)
@@ -248,8 +252,31 @@ class SystemModule(s: UmbraSession) : Module(s, "System") {
             val en = runCatching {
                 ifStub.dl(3).getInterfaceEnabled(GetRequest.newBuilder().setRequestId(id).build(), s.headers).interfaceEnabled
             }.getOrNull()
-            id to InterfaceState(meta, en, null)
+            id to InterfaceState(meta, en, null, loadComments(meta))
         }
+    }
+
+    /** Kommentare aller Ports (ohne Port-Angaben: Port 0). Leere Kommentare werden ausgelassen. */
+    private suspend fun loadComments(meta: LumosExtendedDMXInterfaceMetadata): Map<Int, String> {
+        val id = meta.interfaceData.interfaceId
+        val ports = meta.interfaceData.portMetadataList.map { it.port }.ifEmpty { listOf(0) }.distinct()
+        return ports.mapNotNull { port ->
+            runCatching {
+                ifStub.dl(3).getComment(
+                    LumosProtobuf.DMXInterfaceManagementTypes.GetSetDMXInterfaceCommentRequestResponse.newBuilder()
+                        .setInterfaceId(id).setPort(port).build(), s.headers
+                ).comment
+            }.getOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let { port to it }
+        }.toMap()
+    }
+
+    /** Kommentar eines Ports setzen (wie in DMXControl). */
+    fun setComment(id: String, port: Int, comment: String) = act("Kommentar") {
+        ifStub.dl(5).setComment(
+            LumosProtobuf.DMXInterfaceManagementTypes.GetSetDMXInterfaceCommentRequestResponse.newBuilder()
+                .setInterfaceId(id).setPort(port).setComment(comment).build(), s.headers
+        ).requireOk("Kommentar")
+        _interfaces.update { m -> m[id]?.let { st -> m + (id to st.copy(comments = st.comments + (port to comment))) } ?: m }
     }
 
     suspend fun loadRdm() {
