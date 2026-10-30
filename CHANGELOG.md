@@ -1,3 +1,9 @@
+# Lichtpult Remote 1.3.1
+
+## Neu
+- **System → Hardware:** DMX-Interfaces zeigen den Kommentar aus DMXControl, die Instanznummer und weitere Angaben (z. B. IP) – gleiche Interfaces sind so unterscheidbar.
+- Kommentar direkt in der App ändern (Antippen des Interfaces), wird in DMXControl gespeichert.
+
 # Lichtpult Remote 1.3.0
 
 ## Neu
