@@ -9,6 +9,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -81,6 +82,7 @@ import de.sebi.dmxc3remote.net.GraphCatalogItem
 import de.sebi.dmxc3remote.net.GraphEdge
 import de.sebi.dmxc3remote.net.UmbraSession
 import de.sebi.dmxc3remote.net.portKey
+import de.sebi.dmxc3remote.net.text
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -321,7 +323,23 @@ private fun Overview(s: UmbraSession, set: ConnectionSetDescriptor, onPick: (Str
                         pan = c - (c - pan) * (nz / zoom) + p; zoom = nz
                     }
                 }
-                // Verschieben von Bausteinen: DMXControl stellt die Position über die Schnittstelle nicht bereit
+                .pointerInput(nodes, pos) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { t ->
+                            val w = (t - pan) / (zoom * dens)
+                            nodes.lastOrNull { n -> pos[n.id.nodeId]?.let { Rect(it, Size(NW, NH)).contains(w) } == true }?.let {
+                                dragId = it.id.nodeId; dragPos = pos[it.id.nodeId] ?: Offset.Zero
+                            }
+                        },
+                        onDragEnd = {
+                            val id = dragId
+                            val n = nodes.firstOrNull { it.id.nodeId == id }
+                            if (n != null) m.moveNode(set.id, n, dragPos.x, dragPos.y)
+                            dragId = null
+                        },
+                        onDragCancel = { dragId = null }
+                    ) { change, d -> if (dragId != null) { change.consume(); dragPos += d / (zoom * dens) } }
+                }
                 .pointerInput(nodes, pos) {
                     detectTapGestures { t ->
                         val w = (t - pan) / (zoom * dens)
@@ -367,7 +385,7 @@ private fun Overview(s: UmbraSession, set: ConnectionSetDescriptor, onPick: (Str
                 }
             }
         }
-        Text("Antippen = bearbeiten · zwei Finger = zoomen/verschieben", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim,
+        Text("Antippen = bearbeiten · lange drücken = Baustein verschieben · zwei Finger = zoomen", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim,
             modifier = Modifier.align(Alignment.BottomStart).padding(10.dp).background(Desk.Surface.copy(alpha = 0.8f), RoundedCornerShape(6.dp)).padding(6.dp))
         Column(Modifier.align(Alignment.BottomEnd).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             RoundBtn("⤢") { zoom = 0f }
@@ -447,7 +465,7 @@ private fun Focus(s: UmbraSession, set: ConnectionSetDescriptor, node: NodeMetad
                     Text(node.title(), style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(node.kindWithName(values) + (node.description.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 4.dp)) {
-                        SmallChip("⚙ Werte", false, { paramsOpen = true; m.loadNodeParams(node) })
+                        SmallChip("⚙ Werte", false, { paramsOpen = true; m.loadNodeParams(set.id, node) })
                         SmallChip("Entfernen", false, { confirmDel = true })
                     }
                 }
@@ -503,7 +521,7 @@ private fun Focus(s: UmbraSession, set: ConnectionSetDescriptor, node: NodeMetad
     }
 
     connectFor?.let { p -> ConnectSheet(s, set, node, p) { connectFor = null } }
-    if (paramsOpen) NodeParamsSheet(s, node) { paramsOpen = false }
+    if (paramsOpen) NodeParamsSheet(s, set.id, node) { paramsOpen = false }
     if (confirmDel) AlertDialog(
         onDismissRequest = { confirmDel = false },
         title = { Text("„${node.title()}“ entfernen?") },
@@ -619,7 +637,7 @@ private fun AddSheet(s: UmbraSession, set: ConnectionSetDescriptor, from: PortMe
 }
 
 @Composable
-private fun NodeParamsSheet(s: UmbraSession, node: NodeMetadataData, onClose: () -> Unit) {
+private fun NodeParamsSheet(s: UmbraSession, setId: String, node: NodeMetadataData, onClose: () -> Unit) {
     val m = s.inputGraph
     val all by m.nodeParams.collectAsStateWithLifecycle()
     val list = all[node.id.nodeId]
@@ -627,15 +645,56 @@ private fun NodeParamsSheet(s: UmbraSession, node: NodeMetadataData, onClose: ()
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             when {
                 list == null -> Text("Werte werden geladen …", color = Desk.TextDim)
-                list.isEmpty() -> Text(
-                    "DMXControl stellt die Werte der Bausteine (z. B. Fade Factor, Intensity) über die Schnittstelle nicht bereit – " +
-                        "einstellbar nur am PC. Feste Werte lassen sich alternativ über einen Eingang „Konstante“ zuführen." +
-                        (node.memberInputValue.takeIf { it.isNotBlank() }?.let { "\nAktuelle Einstellung: $it" } ?: ""),
-                    style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
-                )
-                else -> list.filter { !it.desc.name.equals("Position", true) }.sortedBy { it.desc.saveOrder }
-                    .forEach { p -> ParamEditor(p, onSet = { v -> m.setNodeParam(node, p, v) }) }
+                list.isEmpty() -> Text("Dieser Baustein hat keine einstellbaren Werte.", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+                else -> {
+                    // Position wird per Ziehen geändert; Eingangs-Festwerte (IsPortParameter) als eigene Gruppe
+                    val shown = list.filter { it.desc.name != "Position" }.sortedBy { it.desc.saveOrder }
+                    val (ports, own) = shown.partition { it.desc.metadataMap["IsPortParameter"] == "true" }
+                    own.forEach { p -> NodeParam(p) { v -> m.setNodeParam(setId, node, p, v) } }
+                    if (ports.isNotEmpty()) {
+                        Text("Feste Werte der Eingänge", style = MaterialTheme.typography.labelMedium, color = Desk.Amber, modifier = Modifier.padding(top = 4.dp))
+                        Text("Gelten, solange am Eingang kein Kabel steckt.", style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
+                        ports.forEach { p -> NodeParam(p) { v -> m.setNodeParam(setId, node, p, v) } }
+                    }
+                }
             }
         }
     }
+}
+
+/** Ein Baustein-Parameter: MultiTypeValue (Ein/Aus, Zahl) eigens, alles andere über den allgemeinen Editor. */
+@Composable
+private fun NodeParam(p: de.sebi.dmxc3remote.net.DevParam, onSet: (LumosProtobuf.CommonTypes.ObjectData) -> Unit) {
+    val v = p.value
+    // Option-Bit 2 = nur lesen (z. B. Name von Ein-/Ausgängen: options 11 statt 9 im Mitschnitt)
+    if (p.desc.options and 2 != 0) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(p.label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+            Text(v?.text() ?: "–", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        return
+    }
+    if (de.sebi.dmxc3remote.net.DotNetValue.isMulti(v)) {
+        val cur = de.sebi.dmxc3remote.net.DotNetValue.parseMulti(v)
+        Column {
+            Text(p.label, style = MaterialTheme.typography.labelLarge)
+            when (cur) {
+                is Boolean -> Switch(checked = cur, onCheckedChange = { b -> de.sebi.dmxc3remote.net.DotNetValue.buildMulti(v!!, b)?.let(onSet) })
+                is Int, is Double -> {
+                    var t by remember(p.desc.name, cur) { mutableStateOf(cur.toString()) }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        CompactSearch(t, { t = it }, "Wert", Modifier.weight(1f))
+                        TextButton(onClick = {
+                            val n = t.replace(',', '.')
+                            val nv: Any? = if (cur is Int) n.toDoubleOrNull()?.let { Math.round(it).toInt() } else n.toDoubleOrNull()
+                            nv?.let { de.sebi.dmxc3remote.net.DotNetValue.buildMulti(v!!, it)?.let(onSet) }
+                        }) { Text("Setzen") }
+                    }
+                }
+                else -> Text("– (kein Wert)", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+            }
+        }
+        return
+    }
+    ParamEditor(p, onSet = onSet)
 }

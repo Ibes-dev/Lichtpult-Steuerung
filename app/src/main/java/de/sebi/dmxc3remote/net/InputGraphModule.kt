@@ -410,47 +410,46 @@ class InputGraphModule(s: UmbraSession) : Module(s, "Eingangszuweisung") {
         _banks.value = stub.dl(10).getBanks(s.getMultiple(), s.headers).banksList.sortedBy { it.number }
     }
 
-    /** Werte eines Bausteins laden. Kandidaten: allgemeine Typnamen und der Bausteintyp selbst. */
-    fun loadNodeParams(node: NodeMetadataData) = act("Baustein-Werte") {
-        val id = node.id.nodeId
-        val r = params("node", nodeTypes(node), id, nodeIds(node))
-        _nodeParams.update { it + (id to (r?.second ?: emptyList())) }
-    }
-
     /**
-     * Baustein verschieben: Parameter "Position" des Bausteins (in DMXControl sichtbar als "518, -69").
-     * Die Kodierung des Werts ist nicht dokumentiert – die App spiegelt das gelesene Format bzw.
-     * probiert PointData und Text "x, y" und prüft am neu geladenen Set, ob die Position stimmt.
+     * Baustein-Parameter: Typ "GraphNode", ID "<Set-ID>#<Knoten-ID>".
+     * Belegt durch den Mitschnitt der Windows-Oberfläche (ParameterClient.Get/Set/TestParameterValue).
      */
-    fun moveNode(setId: String, node: NodeMetadataData, x: Float, y: Float) = act("Baustein verschieben") {
-        val id = node.id.nodeId
-        val (t, list) = params("node", nodeTypes(node), id, nodeIds(node))
-            ?: throw UmbraException("DMXControl stellt Position und Werte der Bausteine über die Schnittstelle nicht bereit")
-        val p = list.firstOrNull { it.desc.name.equals("Position", true) || it.desc.displayName.equals("Position", true) }
-            ?: throw UmbraException("Kein Positions-Parameter gefunden (${list.joinToString { it.desc.name }})")
-        val xi = Math.round(x); val yi = Math.round(y)
-        val point = PointData.newBuilder().setX(xi.toFloat()).setY(yi.toFloat()).build()
-        val cur = p.value
-        val candidates = buildList {
-            if (cur != null && cur.fallbackCase == ObjectData.FallbackCase.FALLBACKPROTOBUF)
-                add("Vorlage" to cur.toBuilder().setFallbackProtobuf(point.toByteString()).build())
-            add("Text" to ObjectData.newBuilder().setStringValue("$xi, $yi").build())
-            add("PointData" to ObjectData.newBuilder().setFallbackProtobuf(point.toByteString()).setProtobufTypeAQ("LumosProtobuf.PointData").build())
-        }
-        for ((name, v) in candidates) {
-            val r = runCatching { setParam(t, idFor["node$id"] ?: id, p, v) }
-            if (r.isFailure) { Diag.note("Baustein verschieben ($name): abgelehnt ${r.exceptionOrNull()?.message}"); continue }
-            reloadSet(setId)
-            val now = _sets.value[setId]?.nodesList?.firstOrNull { it.id.nodeId == id }?.position
-            Diag.note("Baustein verschieben ($name): soll $xi, $yi – ist ${now?.x}, ${now?.y}")
-            if (now != null && kotlin.math.abs(now.x - xi) < 2 && kotlin.math.abs(now.y - yi) < 2) return@act
-        }
-        throw UmbraException("DMXControl hat die neue Position nicht übernommen (Details unter Diagnose)")
+    private fun nodeKey(setId: String, node: NodeMetadataData) = "${node.id.graphId.ifBlank { setId }}#${node.id.nodeId}"
+
+    private suspend fun nodeParamsOf(setId: String, node: NodeMetadataData): List<DevParam> {
+        val id = nodeKey(setId, node)
+        val r = par.dl(5).getParameters(
+            GetParametersRequest.newBuilder().setType("GraphNode").setId(id).setIncludingValues(true).setUserContextId(s.userContextId).build(), s.headers)
+        return r.parametersList.map { DevParam(it, r.parameterValuesMap[it.name]) }
     }
 
-    fun setNodeParam(node: NodeMetadataData, p: DevParam, v: ObjectData) = s.throttler.submit("node:${node.id.nodeId}:${p.desc.name}") {
-        val t = typeFor["node"] ?: return@submit
-        setParam(t, idFor["node${node.id.nodeId}"] ?: node.id.nodeId, p, v)
-        _nodeParams.update { m -> m + (node.id.nodeId to (m[node.id.nodeId] ?: emptyList()).map { if (it.desc.name == p.desc.name) it.copy(value = v) else it }) }
+    /** Baustein verschieben (Parameter "Position", System.Drawing.Point). */
+    fun moveNode(setId: String, node: NodeMetadataData, x: Float, y: Float) = act("Baustein verschieben") {
+        val list = nodeParamsOf(setId, node)
+        val p = list.firstOrNull { it.desc.name == "Position" } ?: throw UmbraException("Baustein hat keinen Positions-Parameter")
+        par.dl(5).setParameterValue(
+            SetTestParameterValueRequest.newBuilder().setId(nodeKey(setId, node)).setParameter(p.desc)
+                .setUserContextId(s.userContextId).setValue(DotNetValue.buildPoint(Math.round(x), Math.round(y))).build(),
+            s.headers
+        ).requireOk("Position")
+        reloadSet(setId)
     }
+
+    /** Werte eines Bausteins laden (alle Parameter außer Position). */
+    fun loadNodeParams(setId: String, node: NodeMetadataData) = act("Baustein-Werte") {
+        val list = nodeParamsOf(setId, node)
+        Diag.note("Baustein ${node.name}: Parameter " + list.joinToString { "${it.desc.name}(${it.desc.parameterValueTypeAQ.substringBefore(',').substringAfterLast('.')})" })
+        _nodeParams.update { it + (node.id.nodeId to list) }
+    }
+
+    fun setNodeParam(setId: String, node: NodeMetadataData, p: DevParam, v: ObjectData) =
+        s.throttler.submit("node:${node.id.nodeId}:${p.desc.name}") {
+            par.dl(5).setParameterValue(
+                SetTestParameterValueRequest.newBuilder().setId(nodeKey(setId, node)).setParameter(p.desc)
+                    .setUserContextId(s.userContextId).setValue(v).build(),
+                s.headers
+            ).requireOk(p.label)
+            _nodeParams.update { m -> m + (node.id.nodeId to (m[node.id.nodeId] ?: emptyList()).map { if (it.desc.name == p.desc.name) it.copy(value = v) else it }) }
+        }
+
 }
