@@ -85,7 +85,11 @@ class InputGraphModule(s: UmbraSession) : Module(s, "Eingangszuweisung") {
     val nodeParams: StateFlow<Map<String, List<DevParam>>> = _nodeParams.asStateFlow()
 
     private val watched = MutableStateFlow<String?>(null)
-    fun watch(setId: String?) { watched.value = setId; if (setId == null) _values.value = emptyMap() }
+    /** Zuletzt geöffnetes Set (bleibt erhalten, wenn man zur Diagnose wechselt). */
+    @Volatile var lastOpenedSet: String? = null
+        private set
+
+    fun watch(setId: String?) { watched.value = setId; if (setId != null) lastOpenedSet = setId else _values.value = emptyMap() }
 
     private fun catPath(c: LumosProtobuf.ParameterServiceTypes.ParameterCategory?): String {
         val parts = ArrayList<String>(); var x = c
@@ -261,9 +265,12 @@ class InputGraphModule(s: UmbraSession) : Module(s, "Eingangszuweisung") {
         }
 
         // 2) Set und Bausteine wählen (geöffnetes Set, sonst das mit den meisten Knoten)
-        val set = watched.value?.let { _sets.value[it] } ?: _sets.value.values.maxByOrNull { it.nodesCount }
+        val set = (watched.value ?: lastOpenedSet)?.let { _sets.value[it] } ?: _sets.value.values.maxByOrNull { it.nodesCount }
             ?: return "Keine Sets geladen"
-        val nodes = set.nodesList.filter { !it.hidden }.distinctBy { it.typeId }.sortedBy { if (it.typeId.contains("Cuelist", true)) 0 else 1 }.take(4)
+        // Cuelist und Binary Switcher bevorzugt (die Bausteine mit den gesuchten Werten), dann der Rest
+        val nodes = set.nodesList.filter { !it.hidden }.distinctBy { it.typeId }
+            .sortedBy { n -> when { n.typeId.contains("Cuelist", true) -> 0; n.typeId.contains("Switch", true) -> 1; n.type == ENodeType.WORKER -> 2; else -> 3 } }
+            .take(5)
         line("Set \"${set.name}\" (${set.id.take(8)}), getestete Bausteine: " + nodes.joinToString { "${it.name.ifBlank { "?" }} [${it.type}] typeId=${it.typeId}" })
         nodes.forEach { n ->
             line("Baustein ${n.name}: graphId=${n.id.graphId.take(8)} nodeId=${n.id.nodeId.take(8)} memberInputValue=\"${n.memberInputValue}\" Kategorie=\"${n.category.name}\" Anschlüsse=" +
@@ -381,9 +388,17 @@ class InputGraphModule(s: UmbraSession) : Module(s, "Eingangszuweisung") {
 
     /** Set ein-/ausschalten (Parameter "Active" des Sets). */
     fun setSetActive(id: String, on: Boolean) = act("Set aktiv") {
-        val (t, list) = params("set", listOf("ConnectionSet", "InputConnectionSet", "Graph", "InputGraph", "LumosGraph"), id) ?: throw UmbraException("DMXControl bietet für Sets keinen Aktiv-Schalter über die Schnittstelle")
+        val (t, list) = params("set", listOf("Graph"), id) ?: throw UmbraException("DMXControl bietet für Sets keinen Aktiv-Schalter über die Schnittstelle")
         val p = activeParam(list) ?: throw UmbraException("Kein Aktiv-Parameter für Sets gefunden")
         setParam(t, id, p, ObjectData.newBuilder().setBoolValue(on).build())
+        reloadSet(id)
+    }
+
+    /** Set umbenennen (Parameter "Name" des Typs "Graph" – belegt durch den Tiefentest). */
+    fun renameSet(id: String, name: String) = act("Set umbenennen") {
+        val (t, list) = params("set", listOf("Graph"), id) ?: throw UmbraException("Umbenennen über die Schnittstelle nicht möglich")
+        val p = list.firstOrNull { it.desc.name.equals("Name", true) } ?: throw UmbraException("Kein Namens-Parameter gefunden")
+        setParam(t, id, p, ObjectData.newBuilder().setStringValue(name).build())
         reloadSet(id)
     }
 

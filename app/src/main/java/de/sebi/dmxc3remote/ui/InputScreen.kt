@@ -36,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -203,6 +204,7 @@ private fun SetList(
     val m = s.inputGraph
     var newSet by remember { mutableStateOf(false) }
     var delSet by remember { mutableStateOf<ConnectionSetDescriptor?>(null) }
+    var renSet by remember { mutableStateOf<ConnectionSetDescriptor?>(null) }
     var shownBank by rememberSaveable { mutableStateOf(bank?.id) }
     val cur = banks.firstOrNull { it.id == shownBank } ?: bank
     LazyRow(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(horizontal = 10.dp)) {
@@ -233,6 +235,7 @@ private fun SetList(
                         "Fehler", style = MaterialTheme.typography.labelSmall, color = Color.White,
                         modifier = Modifier.padding(end = 6.dp).clip(RoundedCornerShape(8.dp)).background(Desk.Red).padding(horizontal = 6.dp, vertical = 2.dp)
                     )
+                    IconButton(onClick = { renSet = set }, modifier = Modifier.size(36.dp)) { Icon(Icons.Filled.Edit, contentDescription = "Set umbenennen", tint = Desk.TextDim) }
                     IconButton(onClick = { delSet = set }, modifier = Modifier.size(36.dp)) { Icon(Icons.Filled.Delete, contentDescription = "Set löschen", tint = Desk.TextDim) }
                     Switch(checked = set.active, onCheckedChange = { m.setSetActive(set.id, it) })
                 }
@@ -242,6 +245,7 @@ private fun SetList(
         }
     }
     if (newSet) RenameDialog("Neues Verbindungs-Set", "Neues Set", { name -> m.createSet(cur.id, name); newSet = false }) { newSet = false }
+    renSet?.let { r -> RenameDialog("Set umbenennen", r.name, { name -> m.renameSet(r.id, name); renSet = null }) { renSet = null } }
     delSet?.let { d ->
         AlertDialog(
             onDismissRequest = { delSet = null },
