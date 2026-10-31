@@ -89,6 +89,10 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("beatHaptic", false)
         set(v) = sp.edit().putBoolean("beatHaptic", v).apply()
 
+    var deskStyle: String
+        get() = sp.getString("deskStyle", "DUNKEL") ?: "DUNKEL"
+        set(v) = sp.edit().putString("deskStyle", v).apply()
+
     var masterCompact: Boolean
         get() = sp.getBoolean("masterCompact", false)
         set(v) = sp.edit().putBoolean("masterCompact", v).apply()

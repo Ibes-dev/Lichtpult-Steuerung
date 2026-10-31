@@ -1,3 +1,16 @@
+# Lichtpult Remote 1.4.0
+
+## Neu
+- **Designs:** Dunkel, Schwarz (OLED), Klassisch (Pult), Modern und Hell – unter System → Projekt → Design.
+- **Bedienfeld im Vollbild:** ohne Leisten, Bildschirm bleibt an, Verbindungspunkt und Beenden oben rechts.
+- **Neue Bedienfeld-Elemente:** Drehregler, XY-Feld (X und Y als zwei Eingänge), Auswahl (Optionen wie Szene A/B/C), Cuelist-Monitor (Zustand, aktueller/nächster Cue, Go/Zurück/Stop), Cuelist-Auswahl (antippen = Go, lange drücken = Stop), Geräte-Auswahl (Gruppen oder Einzelgeräte für den Programmer), Uhr.
+- **Mehr Gestaltung je Element:** eigene Farbe (#RRGGBB), Schriftgröße S–XXL, Beschriftung ausblenden, farbiger Rahmen. Das Raster bleibt.
+- **3D-Bühne:** Gobos je Gobo-Nummer unterschiedlich dargestellt, mit Gobo-Rotation und -Indexierung.
+
+## Behoben
+- 3D-Bühne: Gobos von Moving Heads wurden nicht erkannt, wenn das Gerät auch Goborotation/Goboindex hat, oder bei mehreren Gobo-Rädern.
+- Programmer-Änderungen wurden doppelt abonniert (Fehlermeldung im Umbra-Log).
+
 # Lichtpult Remote 1.3.1
 
 ## Neu

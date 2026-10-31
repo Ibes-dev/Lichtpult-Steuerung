@@ -72,7 +72,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val midi = MidiHub(app)
     val stage3d = de.sebi.dmxc3remote.net.Stage3DStore(app)
 
-    init { de.sebi.dmxc3remote.net.EffectMemory.init(app) }
+    init {
+        de.sebi.dmxc3remote.net.EffectMemory.init(app)
+        Desk.style = runCatching { DeskStyle.valueOf(prefs.deskStyle) }.getOrDefault(DeskStyle.DUNKEL)
+    }
+
+    fun setDeskStyle(st: DeskStyle) { prefs.deskStyle = st.name; Desk.style = st }
     val mic = MicBeatDetector()
 
     private val _profiles = MutableStateFlow(prefs.profiles)
@@ -87,6 +92,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val micToDmxc = MutableStateFlow(prefs.micToDmxc)
     val cuelistCompact = MutableStateFlow(prefs.cuelistCompact)
     val masterCompact = MutableStateFlow(prefs.masterCompact)
+    /** Bedienfeld im Vollbild (ohne Leisten, Bildschirm bleibt an). */
+    val softdeskFullscreen = MutableStateFlow(false)
     val navOrder = MutableStateFlow(prefs.navOrder)
     val goCuelistId = MutableStateFlow(prefs.goCuelistId)
     val volumeKeysGo = MutableStateFlow(prefs.volumeKeysGo)
@@ -194,7 +201,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val s = _session.value ?: return
         val e = findMidiElement(m.key) ?: return
         when (e.type) {
-            SdType.FADER -> s.softdesk.fader(e, m.value / 127.0)
+            SdType.FADER, SdType.ROTARY -> s.softdesk.fader(e, m.value / 127.0)
             SdType.BUTTON -> {
                 if (m.kind == 'C') {
                     s.softdesk.button(e, m.value >= 64)

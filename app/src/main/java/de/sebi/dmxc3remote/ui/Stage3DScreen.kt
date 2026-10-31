@@ -235,14 +235,17 @@ private fun DrawScope.drawStage(
     // Bühnenvorderkante
     line3(cam, V3(minX, maxY - 2f, 0f), V3(maxX, maxY - 2f, 0f), Color(0xFF3A3F48), 2f)
 
-    data class Beam(val f: Fixture, val color: Color, val a: Float, val end: V3, val dir: V3, val radius: Float, val gobo: String?)
+    data class Beam(val f: Fixture, val color: Color, val a: Float, val end: V3, val dir: V3, val radius: Float, val gobo: String?,
+                    val goboIdx: Int = 0, val goboRot: Float = 0f)
     val beams = fixtures.mapNotNull { f ->
         val o = live[f.id] ?: return@mapNotNull null
         // weich nachführen: [pan, tilt, zoom, helligkeit, r, g, b]
         val tk = o.intensity ?: if (o.hasColor) 1f else 0f
         val st = smooth.getOrPut(f.id) {
-            floatArrayOf(o.pan?.toFloat() ?: 0f, o.tilt?.toFloat() ?: f.rig.tilt, o.zoom ?: 0.5f, tk, o.r, o.g, o.b)
+            floatArrayOf(o.pan?.toFloat() ?: 0f, o.tilt?.toFloat() ?: f.rig.tilt, o.zoom ?: 0.5f, tk, o.r, o.g, o.b, 0f)
         }
+        // Gobo-Rotation: höchstens eine halbe Umdrehung pro Sekunde
+        if (st.size > 7) st[7] = (st[7] + o.goboSpin * dt * PI.toFloat()) % (2 * PI.toFloat())
         st[0] += ((o.pan?.toFloat() ?: 0f) - st[0]) * kk
         st[1] += ((o.tilt?.toFloat() ?: f.rig.tilt) - st[1]) * kk
         st[2] += ((o.zoom ?: st[2]) - st[2]) * kk
@@ -262,7 +265,8 @@ private fun DrawScope.drawStage(
         val beamDeg = if (o.zoom != null) 5f + st[2] * 40f else f.rig.beam
         val len = if (dir.z < -0.05f) (f.pos.z / -dir.z).coerceAtMost(30f) else 12f
         val end = f.pos + dir * len
-        Beam(f, base, k, end, dir, len * tan(rad(beamDeg / 2)), o.gobo)
+        Beam(f, base, k, end, dir, len * tan(rad(beamDeg / 2)), o.gobo, o.goboIndex,
+            o.goboAngle * 2 * PI.toFloat() + (if (st.size > 7) st[7] else 0f))
     }.sortedByDescending { cam.depth(it.f.pos) }
 
     // Lichtflecken auf dem Boden (additiv)
@@ -272,11 +276,7 @@ private fun DrawScope.drawStage(
         val c = cam.project(b.end) ?: return@forEach
         val r = ring.maxOf { (it - c).getDistance() }
         if (b.gobo != null) {
-            // Gobo angedeutet: Muster aus Lichtpunkten statt vollem Kreis
-            circle(b.end, b.dir, b.radius * 0.55f, 6).forEach { p ->
-                cam.project(p)?.let { q -> drawCircle(Brush.radialGradient(listOf(b.color.copy(alpha = 0.9f * b.a), Color.Transparent), q, r * 0.32f), r * 0.32f, q, blendMode = BlendMode.Plus) }
-            }
-            drawCircle(Brush.radialGradient(listOf(b.color.copy(alpha = 0.7f * b.a), Color.Transparent), c, r * 0.25f), r * 0.25f, c, blendMode = BlendMode.Plus)
+            drawGobo(cam, b.end, b.dir, b.radius, b.goboIdx, b.goboRot, b.color, b.a, r)
         } else {
             drawPath(polyPath(ring), Brush.radialGradient(listOf(b.color.copy(alpha = 0.85f * b.a), b.color.copy(alpha = 0.25f * b.a)), c, r), blendMode = BlendMode.Plus)
         }
@@ -322,6 +322,54 @@ private fun circle(center: V3, axis: V3, r: Float, n: Int): List<V3> {
     val helper = if (abs(axis.z) < 0.9f) V3(0f, 0f, 1f) else V3(1f, 0f, 0f)
     val u = (axis cross helper).norm(); val v = (axis cross u).norm()
     return List(n) { i -> center + u * (r * cs[i]) + v * (r * sn[i]) }
+}
+
+/** Kreis mit Drehwinkel [phase] (für drehende Gobos). */
+private fun circleAt(center: V3, axis: V3, r: Float, n: Int, phase: Float): List<V3> {
+    val helper = if (abs(axis.z) < 0.9f) V3(0f, 0f, 1f) else V3(1f, 0f, 0f)
+    val u = (axis cross helper).norm(); val v = (axis cross u).norm()
+    return List(n) { i -> val a = phase + 2 * PI.toFloat() * i / n; center + u * (r * cos(a)) + v * (r * sin(a)) }
+}
+
+/**
+ * Gobo-Projektion am Boden. Die Gobo-Bilder liefert DMXControl nicht; die Form wird aus der
+ * Gobo-Nummer abgeleitet, damit verschiedene Gobos verschieden aussehen. Drehung aus
+ * Goborotation/Goboindex.
+ */
+private fun DrawScope.drawGobo(cam: Camera, end: V3, dir: V3, radius: Float, idx: Int, rot: Float, color: Color, a: Float, rPx: Float) {
+    val c = cam.project(end) ?: return
+    val col = color.copy(alpha = (0.85f * a).coerceIn(0f, 1f))
+    fun spot(p: V3, size: Float) { cam.project(p)?.let { q -> drawCircle(Brush.radialGradient(listOf(col, Color.Transparent), q, rPx * size), rPx * size, q, blendMode = BlendMode.Plus) } }
+    fun poly(pts: List<V3>) { val q = pts.mapNotNull { cam.project(it) }; if (q.size == pts.size && q.size >= 3) drawPath(polyPath(q), col, blendMode = BlendMode.Plus) }
+    when (idx.mod(5)) {
+        // Punktkranz: 5–8 Lichtpunkte
+        0 -> { circleAt(end, dir, radius * 0.6f, 5 + idx.mod(4), rot).forEach { spot(it, 0.24f) }; spot(end, 0.18f) }
+        // Strahlen: Tortenstücke
+        1 -> {
+            val n = 6 + 2 * idx.mod(3)
+            val rim = circleAt(end, dir, radius, n * 2, rot)
+            for (i in 0 until n) poly(listOf(end, rim[2 * i], rim[(2 * i + 1) % rim.size]))
+        }
+        // Ring
+        2 -> circleAt(end, dir, radius * 0.75f, 20, rot).forEach { spot(it, 0.12f) }
+        // Balken
+        3 -> {
+            val helper = if (abs(dir.z) < 0.9f) V3(0f, 0f, 1f) else V3(1f, 0f, 0f)
+            val u0 = (dir cross helper).norm(); val v0 = (dir cross u0).norm()
+            val u = u0 * cos(rot) + v0 * sin(rot); val v = v0 * cos(rot) - u0 * sin(rot)
+            for (k in -1..1) {
+                val o = end + v * (k * radius * 0.55f)
+                poly(listOf(o + u * radius * 0.85f + v * radius * 0.12f, o - u * radius * 0.85f + v * radius * 0.12f,
+                    o - u * radius * 0.85f - v * radius * 0.12f, o + u * radius * 0.85f - v * radius * 0.12f))
+            }
+        }
+        // Stern
+        else -> {
+            val outer = circleAt(end, dir, radius * 0.95f, 5, rot)
+            val inner = circleAt(end, dir, radius * 0.4f, 5, rot + PI.toFloat() / 5)
+            poly(List(10) { i -> if (i % 2 == 0) outer[i / 2] else inner[i / 2] })
+        }
+    }
 }
 
 private fun polyPath(pts: List<Offset>) = Path().apply {

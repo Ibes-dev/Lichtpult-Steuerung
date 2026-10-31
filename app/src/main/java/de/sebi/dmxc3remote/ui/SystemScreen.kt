@@ -20,6 +20,13 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -50,7 +57,7 @@ fun SystemScreen(s: UmbraSession, vm: AppViewModel) {
             }
         }
         when (section) {
-            0 -> Overview(s)
+            0 -> Overview(s, vm)
             1 -> DmxMonitor(s)
             2 -> Hardware(s)
             3 -> ControlSettings(s, vm)
@@ -60,7 +67,7 @@ fun SystemScreen(s: UmbraSession, vm: AppViewModel) {
 }
 
 @Composable
-private fun Overview(s: UmbraSession) {
+private fun Overview(s: UmbraSession, vm: AppViewModel) {
     val state by s.project.state.collectAsStateWithLifecycle()
     val dirty by s.project.dirty.collectAsStateWithLifecycle()
     val saving by s.project.saving.collectAsStateWithLifecycle()
@@ -72,6 +79,30 @@ private fun Overview(s: UmbraSession) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        Section("Design") {
+            Text("Farbschema der App", style = MaterialTheme.typography.bodySmall, color = Desk.TextDim)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DeskStyle.entries.forEach { st ->
+                    val p = st.palette
+                    Column(
+                        Modifier.width(96.dp).clip(RoundedCornerShape(10.dp))
+                            .border(2.dp, if (Desk.style == st) Desk.Amber else Desk.Line, RoundedCornerShape(10.dp))
+                            .clickableNoRipple { vm.setDeskStyle(st) }
+                    ) {
+                        // kleine Vorschau: Fläche, Karte, Akzentfarben
+                        Box(Modifier.fillMaxWidth().height(54.dp).background(p.surface).padding(6.dp)) {
+                            Box(Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp)).background(p.panel).padding(5.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.align(Alignment.BottomStart)) {
+                                    listOf(p.amber, p.cyan, p.green, p.red).forEach { c -> Box(Modifier.size(10.dp).clip(CircleShape).background(c)) }
+                                }
+                                Box(Modifier.width(36.dp).height(5.dp).clip(RoundedCornerShape(2.dp)).background(p.text))
+                            }
+                        }
+                        Text(st.label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(6.dp), maxLines = 1)
+                    }
+                }
+            }
+        }
         Section("Projekt", error = projErr) {
             Text(
                 when (state) {

@@ -35,6 +35,12 @@ data class LiveOut(
     val zoom: Float? = null,
     /** Gobo eingesetzt (nicht "offen") und dessen Name. */
     val gobo: String? = null,
+    /** Nummer des Gobos auf dem Rad (für die Form der Darstellung). */
+    val goboIndex: Int = 0,
+    /** Gobo-Rotation: Geschwindigkeit −1..1 (0 = steht). */
+    val goboSpin: Float = 0f,
+    /** Gobo-Indexierung: fester Winkel 0..1 (eine Umdrehung). */
+    val goboAngle: Float = 0f,
     /** Strobe aktiv (Geschwindigkeit > 0). */
     val strobe: Float? = null
 )
@@ -43,7 +49,8 @@ data class LiveOut(
 private data class LiveProps(
     val dimmer: DevicePropertyDescriptor?, val color: DevicePropertyDescriptor?,
     val position: DevicePropertyDescriptor?, val zoom: DevicePropertyDescriptor?,
-    val gobo: DevicePropertyDescriptor?, val strobe: DevicePropertyDescriptor?
+    val gobo: DevicePropertyDescriptor?, val strobe: DevicePropertyDescriptor?,
+    val goboRot: DevicePropertyDescriptor? = null, val goboIdx: DevicePropertyDescriptor? = null
 )
 
 /** Bühnenansichten (StageView) mit Gerätepositionen, Live-Ausgabe, Highlight und Bearbeitung. */
@@ -109,12 +116,16 @@ class StageModule(s: UmbraSession) : Module(s, "Bühnenansicht") {
             color = props.firstOrNull { it.kind() == PropKind.COLOR },
             position = props.firstOrNull { it.kind() == PropKind.POSITION },
             zoom = props.firstOrNull { p -> (p.kind() == PropKind.DOUBLE) && "zoom" in words(p) },
-            gobo = props.firstOrNull { p -> "gobo" in words(p) },
+            // Gobo-Rad: die Eigenschaft "Gobo" selbst – nicht Goborotation/Goboindex (Zahlenwerte)
+            gobo = props.firstOrNull { p -> "gobo" in words(p) && p.kind() != PropKind.DOUBLE && listOf("rotation", "index", "shake").none { it in words(p) } }
+                ?: props.firstOrNull { p -> "gobo" in words(p) && p.kind() != PropKind.DOUBLE },
+            goboRot = props.firstOrNull { p -> p.kind() == PropKind.DOUBLE && "gobo" in words(p) && "rotation" in words(p) },
+            goboIdx = props.firstOrNull { p -> p.kind() == PropKind.DOUBLE && "gobo" in words(p) && "index" in words(p) },
             strobe = props.firstOrNull { p -> p.kind() == PropKind.STROBE || ("strobe" in words(p) && p.kind() == PropKind.DOUBLE) }
         )
     }
 
-    private enum class What { DIMMER, COLOR, POSITION, ZOOM, GOBO, STROBE }
+    private enum class What { DIMMER, COLOR, POSITION, ZOOM, GOBO, STROBE, GOBOROT, GOBOIDX }
 
     /**
      * Abfrage per GetDevicePropertiesCurrentValues (Typ CURRENT_OUTPUT) alle 400 ms als Sammelabfrage.
@@ -140,6 +151,8 @@ class StageModule(s: UmbraSession) : Module(s, "Bühnenansicht") {
                         lp.position?.let { add(What.POSITION to it) }
                         lp.zoom?.let { add(What.ZOOM to it) }
                         lp.gobo?.let { add(What.GOBO to it) }
+                        lp.goboRot?.let { add(What.GOBOROT to it) }
+                        lp.goboIdx?.let { add(What.GOBOIDX to it) }
                         lp.strobe?.let { add(What.STROBE to it) }
                     }
                 }
@@ -187,11 +200,25 @@ class StageModule(s: UmbraSession) : Module(s, "Bühnenansicht") {
                             } else cur
                             What.GOBO -> when (v.valueCase) {
                                 DevicePropertyValue.ValueCase.GOBO -> {
-                                    val g = v.gobo.gobovaluesMap.values.firstOrNull()
-                                    cur.copy(gobo = if (g == null || g.open) null else g.caption.ifBlank { g.goboname.ifBlank { "Gobo" } })
+                                    // mehrere Räder möglich: das erste, auf dem ein Gobo (nicht "offen") steht
+                                    fun isOpen(g: LumosProtobuf.ValueTypes.GoboData) = g.open ||
+                                        (g.caption + " " + g.goboname).lowercase().let { "open" in it || "offen" in it }
+                                    val g = v.gobo.gobovaluesMap.values.firstOrNull { !isOpen(it) }
+                                    if (goboLogged.add(id)) Diag.note("3D Gobo ${p.name}: " + v.gobo.gobovaluesMap.values.joinToString { "Rad ${it.gobowheel} #${it.goboindex} ${it.caption.ifBlank { it.goboname }} offen=${it.open}" })
+                                    cur.copy(gobo = g?.let { it.caption.ifBlank { it.goboname.ifBlank { "Gobo ${it.goboindex}" } } }, goboIndex = g?.goboindex ?: 0)
                                 }
                                 else -> cur
                             }
+                            What.GOBOROT -> if (v.valueCase == DevicePropertyValue.ValueCase.DOUBLEVALUE) {
+                                // Bereich mit 0 in der Mitte = Richtung und Tempo; sonst 0..max = nur Tempo
+                                val rg = p.doubleRange()
+                                val spin = if (rg.start < 0) (v.doubleValue / maxOf(-rg.start, rg.endInclusive)) else ((v.doubleValue - rg.start) / (rg.endInclusive - rg.start))
+                                cur.copy(goboSpin = spin.toFloat().coerceIn(-1f, 1f))
+                            } else cur
+                            What.GOBOIDX -> if (v.valueCase == DevicePropertyValue.ValueCase.DOUBLEVALUE) {
+                                val rg = p.doubleRange()
+                                cur.copy(goboAngle = ((v.doubleValue - rg.start) / (rg.endInclusive - rg.start)).toFloat().coerceIn(0f, 1f))
+                            } else cur
                             What.STROBE -> when (v.valueCase) {
                                 DevicePropertyValue.ValueCase.STROBE -> cur.copy(strobe = v.strobe.speed.toFloat().takeIf { it > 0f })
                                 DevicePropertyValue.ValueCase.DOUBLEVALUE -> cur.copy(strobe = v.doubleValue.toFloat().takeIf { it > 0f })
@@ -215,6 +242,7 @@ class StageModule(s: UmbraSession) : Module(s, "Bühnenansicht") {
     }
 
     private var loggedFor = 0
+    private val goboLogged = java.util.Collections.synchronizedSet(HashSet<String>())
 
     /**
      * Anzeigefarbe aus LumosColorData: erste nicht schwarze Quelle aus

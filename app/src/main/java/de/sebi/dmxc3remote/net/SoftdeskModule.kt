@@ -98,7 +98,7 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
 
     private val active = HashMap<String, Pair<Sig, Pair<Softdesk, SdElement>>>()
 
-    private fun sourceIo(e: SdElement) = if (e.type == SdType.FADER) SdIo.NUMERIC else e.sendIo
+    private fun sourceIo(e: SdElement) = if (e.type.numeric) SdIo.NUMERIC else e.sendIo
 
     private fun SdIo.wk() = when (this) {
         SdIo.BOOL -> EWellKnownInputType.BOOL
@@ -127,7 +127,7 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
     }
 
     private fun feedbackType(e: SdElement) = when (e.type) {
-        SdType.FADER -> EFeedbackType.COUPLED
+        SdType.FADER, SdType.ROTARY, SdType.RADIO -> EFeedbackType.COUPLED
         SdType.BUTTON -> EFeedbackType.INDEPENDENT
         else -> EFeedbackType.NONE
     }
@@ -207,7 +207,7 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
      * Fremde Proxies (andere Runtime-ID, DMXControl-intern) werden nicht angefasst.
      */
     suspend fun removeOrphans(includeOldInstalls: Boolean = false): Int {
-        val local = store.desks.value.flatMap { it.elements }
+        val local = store.desks.value.flatMap { d -> d.elements.flatMap { it.virtualSources() } }
         val validSources = local.filter { it.type.hasSource }.map { proxyId(it) }.toSet()
         val validSinks = local.filter { it.type.hasSink }.map { sinkId(it) }.toSet()
         // includeOldInstalls: auch Kanäle mit fremder Runtime-ID dieser App (frühere Installation).
@@ -278,7 +278,7 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
 
     private suspend fun sync(desks: List<Softdesk>) {
         val wanted = desks.flatMap { d ->
-            d.elements.filter { it.type.hasSource || it.type.hasSink }.map { e -> proxyId(e) to (d to e) }
+            d.elements.flatMap { it.virtualSources() }.filter { it.type.hasSource || it.type.hasSink }.map { e -> proxyId(e) to (d to e) }
         }.toMap()
         for ((pid, old) in active.toMap()) {
             val now = wanted[pid]
@@ -393,6 +393,22 @@ class SoftdeskModule(s: UmbraSession, private val store: SoftdeskStore) : Module
             SdIo.STRING -> ObjectData.newBuilder().setStringValue(raw)
         }.build()
         sendValue(e, v)
+    }
+
+    /** Auswahl: sendet den Wert der gewählten Option im Werttyp des Elements. */
+    fun radio(e: SdElement, value: String) = act("Bedienfeld") {
+        val v = when (e.sendIo) {
+            SdIo.BOOL -> ObjectData.newBuilder().setBoolValue(value.equals("true", true) || value == "1")
+            SdIo.NUMERIC -> ObjectData.newBuilder().setDoubleValue(value.replace(',', '.').toDoubleOrNull() ?: 0.0)
+            SdIo.STRING -> ObjectData.newBuilder().setStringValue(value)
+        }.build()
+        sendValue(e, v)
+    }
+
+    /** XY-Feld: X über die Element-Quelle, Y über "<ID>_y" (je 0..1 → min..max). */
+    fun xy(e: SdElement, x: Double, y: Double) {
+        val (ex, ey) = e.virtualSources()
+        fader(ex, x); fader(ey, y)
     }
 
     /** Fader: Position 0..1 wird auf min..max des Elements abgebildet. */

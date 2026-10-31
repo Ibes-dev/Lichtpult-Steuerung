@@ -14,8 +14,18 @@ enum class SdType(val label: String, val hasSource: Boolean, val hasSink: Boolea
     FADER("Fader", true, true),
     LED("LED", false, true),
     DISPLAY("Anzeige", false, true),
-    TEXT("Beschriftung", false, false)
+    TEXT("Beschriftung", false, false),
+    ROTARY("Drehregler", true, true),
+    XY("XY-Feld", true, false),
+    RADIO("Auswahl", true, true),
+    CUELIST_MONITOR("Cuelist-Monitor", false, false),
+    CUELIST_SELECTOR("Cuelist-Auswahl", false, false),
+    DEVICE_SELECTOR("Geräte-Auswahl", false, false),
+    CLOCK("Uhr", false, false)
 }
+
+/** Elemente, die einen Zahlenwert senden (Bereich min..max). */
+val SdType.numeric get() = this == SdType.FADER || this == SdType.ROTARY || this == SdType.XY
 
 /** Werttyp eines Ein- oder Ausgangs (entspricht EWellKnownInputType BOOL/NUMERIC/STRING). */
 enum class SdIo(val label: String) { BOOL("Ein/Aus"), NUMERIC("Zahl"), STRING("Text") }
@@ -46,8 +56,33 @@ data class SdElement(
     val midi: String = "",
     /** Velocity für LED an/aus (z. B. APC mini mk2: Farbindex). */
     val midiOn: Int = 127,
-    val midiOff: Int = 0
+    val midiOff: Int = 0,
+    /** Auswahl: eine Option je Zeile "Beschriftung=Wert" (ohne "=": Wert = Beschriftung). */
+    val options: String = "",
+    /** Ziel: Cuelist-ID (Monitor), "devices" für Einzelgeräte (Geräte-Auswahl). */
+    val target: String = "",
+    /** Schriftgröße relativ (0.8 … 2.0). */
+    val textScale: Float = 1f,
+    /** Beschriftung ausblenden. */
+    val hideLabel: Boolean = false,
+    /** Nur Umriss statt Fläche (Tasten, Anzeigen). */
+    val outline: Boolean = false,
+    /** Eigene Farbe als #RRGGBB, überschreibt die Palette. */
+    val colorHex: String = ""
 )
+
+/** Optionen eines Auswahl-Elements als (Beschriftung, Wert). */
+fun SdElement.optionList(): List<Pair<String, String>> = options.lines().map { it.trim() }.filter { it.isNotEmpty() }.map { l ->
+    val i = l.indexOf('=')
+    if (i < 0) l to l else l.substring(0, i).trim() to l.substring(i + 1).trim()
+}
+
+/**
+ * Eingangsquellen eines Elements in DMXControl. Das XY-Feld meldet zwei: X unter der Element-ID,
+ * Y unter "<ID>_y" – beide als Zahl im Bereich min..max.
+ */
+fun SdElement.virtualSources(): List<SdElement> =
+    if (type == SdType.XY) listOf(copy(name = "$name X"), copy(id = "${id}_y", name = "$name Y")) else listOf(this)
 
 data class Softdesk(
     val id: String,
@@ -141,7 +176,13 @@ class SoftdeskStore(context: Context) {
             showValue = e.optBoolean("showValue", type == SdType.DISPLAY),
             midi = e.optString("midi", ""),
             midiOn = e.optInt("midiOn", 127),
-            midiOff = e.optInt("midiOff", 0)
+            midiOff = e.optInt("midiOff", 0),
+            options = e.optString("options", ""),
+            target = e.optString("target", ""),
+            textScale = e.optDouble("textScale", 1.0).toFloat(),
+            hideLabel = e.optBoolean("hideLabel", false),
+            outline = e.optBoolean("outline", false),
+            colorHex = e.optString("colorHex", "")
         )
         return el to hasPos
     }
@@ -152,6 +193,8 @@ class SoftdeskStore(context: Context) {
         put("mode", e.mode.name); put("sendIo", e.sendIo.name); put("onValue", e.onValue); put("offValue", e.offValue)
         put("min", e.min); put("max", e.max); put("fbIo", e.fbIo.name); put("fbOn", e.fbOn); put("showValue", e.showValue)
         put("midi", e.midi); put("midiOn", e.midiOn); put("midiOff", e.midiOff)
+        put("options", e.options); put("target", e.target); put("textScale", e.textScale.toDouble())
+        put("hideLabel", e.hideLabel); put("outline", e.outline); put("colorHex", e.colorHex)
     }
 
     private fun desksJson(list: List<Softdesk>): JSONArray {
@@ -256,21 +299,31 @@ class SoftdeskStore(context: Context) {
 
     fun newElement(deskId: String, type: SdType, x: Int, y: Int): SdElement? {
         val d = _desks.value.firstOrNull { it.id == deskId } ?: return null
-        val h = if (type == SdType.FADER) minOf(3, d.rows - y).coerceAtLeast(1) else 1
+        val h = when (type) {
+            SdType.FADER -> minOf(3, d.rows - y).coerceAtLeast(1)
+            SdType.XY, SdType.CUELIST_SELECTOR, SdType.DEVICE_SELECTOR -> minOf(2, d.rows - y).coerceAtLeast(1)
+            SdType.ROTARY, SdType.CUELIST_MONITOR -> minOf(2, d.rows - y).coerceAtLeast(1)
+            else -> 1
+        }
+        val w = when (type) {
+            SdType.XY, SdType.CUELIST_MONITOR, SdType.CUELIST_SELECTOR, SdType.DEVICE_SELECTOR, SdType.RADIO -> minOf(2, d.cols - x).coerceAtLeast(1)
+            else -> 1
+        }
         val count = d.elements.count { it.type == type } + 1
         val e = SdElement(
             id = UUID.randomUUID().toString().take(8),
             type = type,
             name = "${type.label} $count",
-            x = x, y = y, w = 1, h = h,
+            x = x, y = y, w = w, h = h,
             color = d.elements.size % 6,
-            sendIo = if (type == SdType.FADER) SdIo.NUMERIC else SdIo.BOOL,
-            fbIo = when (type) {
-                SdType.FADER -> SdIo.NUMERIC
-                SdType.DISPLAY -> SdIo.STRING
+            sendIo = when { type.numeric -> SdIo.NUMERIC; type == SdType.RADIO -> SdIo.STRING; else -> SdIo.BOOL },
+            fbIo = when {
+                type.numeric -> SdIo.NUMERIC
+                type == SdType.DISPLAY || type == SdType.RADIO -> SdIo.STRING
                 else -> SdIo.BOOL
             },
-            showValue = type == SdType.DISPLAY
+            showValue = type == SdType.DISPLAY || type == SdType.ROTARY,
+            options = if (type == SdType.RADIO) "A=1\nB=2\nC=3" else ""
         )
         update(deskId) { it.copy(elements = it.elements + e, rows = maxOf(it.rows, y + h)) }
         return e
