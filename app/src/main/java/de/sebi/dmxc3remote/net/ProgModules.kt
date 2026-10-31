@@ -389,7 +389,8 @@ class DeviceModule(s: UmbraSession) : Module(s, "Gerätegruppen") {
         // Programmer-Änderungen (auch vom PC oder anderen Clients) -> betroffene Werte neu lesen
         launch {
             runCatching {
-                progStub.receiveProgrammerChanges(s.getRequest(), s.headers).collect { m ->
+                // Meldungen vom Programmer-Modul (nur eine Anmeldung je Sitzung bei Umbra möglich)
+                s.programmer.changes.collect { m ->
                     val g = selectedGroup ?: return@collect
                     if (m.userContextId.isNotBlank() && m.userContextId != s.userContextId) return@collect
                     when {
