@@ -63,6 +63,14 @@ private val KNOWN_ENUMS: Map<String, List<String>> = mapOf(
  */
 fun ObjectData.fallback(): FallbackValue? {
     if (valueCase != ObjectData.ValueCase.VALUE_NOT_SET) return null
+    // MultiTypeValue (Werte aus der Eingangszuweisung, z. B. On/Off Value, Konstanten): echten Wert lesen.
+    // Die Enum-Heuristik unten würde hier die Schluss-Bytes 0A 0A 0A als Zahl 168430080 deuten.
+    if (DotNetValue.isMulti(this)) {
+        val v = DotNetValue.parseMulti(this)
+        val n = when (v) { is Boolean -> if (v) 1 else 0; is Number -> v.toInt(); else -> null }
+        return FallbackValue("MultiTypeValue", n, DotNetValue.multiText(this))
+    }
+    DotNetValue.parsePoint(this)?.let { (x, y) -> return FallbackValue("Point", null, "$x, $y") }
     val typeAq = fallbackTypeAQ.ifBlank { protobufTypeAQ }
     val typeName = typeAq.substringBefore(',').substringAfterLast('.').substringAfterLast('+')
     val bytes = when (fallbackCase) {

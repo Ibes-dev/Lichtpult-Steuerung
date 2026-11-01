@@ -432,7 +432,12 @@ fun ObjectData.asDouble(): Double? = when (valueCase) {
     ObjectData.ValueCase.USHORTVALUE -> ushortValue.toDouble()
     ObjectData.ValueCase.BYTEVALUE -> byteValue.toDouble()
     ObjectData.ValueCase.BOOLVALUE -> if (boolValue) 1.0 else 0.0
-    ObjectData.ValueCase.VALUE_NOT_SET -> fallback()?.number?.toDouble()
+    ObjectData.ValueCase.VALUE_NOT_SET -> when (val m = DotNetValue.parseMulti(this)) {
+        is Boolean -> if (m) 1.0 else 0.0
+        is Number -> m.toDouble()
+        is String -> m.trim().replace(',', '.').toDoubleOrNull()
+        else -> fallback()?.number?.toDouble()
+    }
     else -> text().trim().replace(',', '.').toDoubleOrNull()
 }
 

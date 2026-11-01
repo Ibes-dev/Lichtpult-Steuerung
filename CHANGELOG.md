@@ -11,6 +11,7 @@
 ## Behoben
 - 3D-Bühne: Gobos von Moving Heads wurden nicht erkannt, wenn das Gerät auch Goborotation/Goboindex hat, oder bei mehreren Gobo-Rädern.
 - Programmer-Änderungen wurden doppelt abonniert (Fehlermeldung im Umbra-Log).
+- Bedienfeld: Werte aus der Zuweisung (z. B. 0 von einer Konstante oder einem Binary Switcher) wurden falsch gelesen; Fader und Anzeigen zeigen jetzt den richtigen Wert.
 
 # Lichtpult Remote 1.3.1
 

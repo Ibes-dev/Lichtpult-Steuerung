@@ -108,4 +108,17 @@ class NetTest {
         assertEquals("Strobo", DotNetValue.multiFromText("Strobo"))
         assertEquals("True", DotNetValue.multiText(tpl))
     }
+
+    @Test
+    fun multiTypeValueAsFeedback() {
+        // Rückmeldung aus der Zuweisung als MultiTypeValue: 0 muss 0 bleiben (nicht 168430080 aus den Schluss-Bytes)
+        val tpl = ObjectData.newBuilder()
+            .setFallbackTypeAQ("org.dmxc.lumos.Kernel.Input.v2.MultiTypeValue, LumosLIB, Version=3.3.3.0, Culture=neutral, PublicKeyToken=null")
+            .setFallbackNet(com.google.protobuf.ByteString.copyFrom(hex(capturedMulti))).build()
+        assertEquals(0.0, DotNetValue.buildMulti(tpl, 0.0)!!.asDouble())
+        assertEquals(0.0, DotNetValue.buildMulti(tpl, 0)!!.asDouble())
+        assertEquals(0.5, DotNetValue.buildMulti(tpl, 0.5)!!.asDouble())
+        assertEquals(1.0, tpl.asDouble())
+        assertEquals("0", DotNetValue.buildMulti(tpl, 0)!!.text())
+    }
 }
