@@ -112,7 +112,11 @@ fun SoftdeskScreen(
     val importer = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri -> importUri = uri }
-    val desks by store.desks.collectAsStateWithLifecycle()
+    val allDesks by store.desks.collectAsStateWithLifecycle()
+    val occasions by store.occasions.collectAsStateWithLifecycle()
+    val activeOcc by store.activeOccasion.collectAsStateWithLifecycle()
+    // nur die im gewählten Anlass sichtbaren Bedienfelder (alle bleiben in DMXControl angemeldet)
+    val desks = remember(allDesks, occasions, activeOcc) { store.visible(allDesks, occasions, activeOcc) }
     val rules by store.rules.collectAsStateWithLifecycle()
     val fb by s.softdesk.feedback.collectAsStateWithLifecycle()
     val registered by s.softdesk.registered.collectAsStateWithLifecycle()
@@ -182,7 +186,12 @@ fun SoftdeskScreen(
             )
         }
 
-        if (desk == null) {
+        if (desk == null && allDesks.isNotEmpty()) {
+            EmptyHint(
+                "Kein Bedienfeld in diesem Anlass",
+                "Unter System → Bedienfeld den Anlass wechseln oder Bedienfelder darin einblenden."
+            )
+        } else if (desk == null) {
             EmptyHint(
                 "Noch kein Bedienfeld",
                 "Auf Bearbeiten tippen, dann Neu. Elemente legst du durch Antippen freier Rasterfelder an. " +

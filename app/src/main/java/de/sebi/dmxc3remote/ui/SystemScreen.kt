@@ -52,7 +52,7 @@ fun SystemScreen(s: UmbraSession, vm: AppViewModel) {
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            listOf("Projekt", "DMX-Ausgabe", "Hardware", "Steuerung", "Info").forEachIndexed { i, t ->
+            listOf("Projekt", "DMX-Ausgabe", "Hardware", "Steuerung", "Bedienfeld", "Info").forEachIndexed { i, t ->
                 androidx.compose.material3.FilterChip(selected = i == section, onClick = { section = i }, label = { Text(t) })
             }
         }
@@ -61,6 +61,7 @@ fun SystemScreen(s: UmbraSession, vm: AppViewModel) {
             1 -> DmxMonitor(s)
             2 -> Hardware(s)
             3 -> ControlSettings(s, vm)
+            4 -> SoftdeskSettings(vm)
             else -> AboutScreen()
         }
     }
@@ -409,5 +410,76 @@ private fun AboutScreen() {
                 style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
             )
         }
+    }
+}
+
+
+/**
+ * System → Bedienfeld: Anlässe. Ein Anlass legt fest, welche Bedienfelder sichtbar sind; die Wahl
+ * liegt bewusst hier und nicht im Bedienfeld, damit die Show-Ansicht aufgeräumt bleibt.
+ * Ausgeblendete Bedienfelder bleiben in DMXControl angemeldet.
+ */
+@Composable
+private fun SoftdeskSettings(vm: AppViewModel) {
+    val store = vm.softdesks
+    val desks by store.desks.collectAsStateWithLifecycle()
+    val occasions by store.occasions.collectAsStateWithLifecycle()
+    val active by store.activeOccasion.collectAsStateWithLifecycle()
+    var newOcc by remember { mutableStateOf(false) }
+    var rename by remember { mutableStateOf<de.sebi.dmxc3remote.net.Occasion?>(null) }
+    var delete by remember { mutableStateOf<de.sebi.dmxc3remote.net.Occasion?>(null) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Section("Aktueller Anlass") {
+            Text(
+                "Bestimmt, welche Bedienfelder im Bereich Bedienfeld zu sehen sind. Ausgeblendete bleiben in DMXControl " +
+                    "angemeldet; ihre Verbindungen in der Zuweisung bleiben erhalten.",
+                style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+            )
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SmallChip("Alle Bedienfelder", active == null, { store.setActiveOccasion(null) })
+                occasions.forEach { o -> SmallChip(o.name, active == o.id, { store.setActiveOccasion(o.id) }) }
+            }
+        }
+        Section("Anlässe") {
+            if (occasions.isEmpty()) Text(
+                "Noch keine Anlässe. Lege z. B. „Konzert“ oder „Fasnet“ an und wähle die passenden Bedienfelder.",
+                style = MaterialTheme.typography.bodySmall, color = Desk.TextDim
+            )
+            occasions.forEach { o ->
+                Column(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Desk.Raised).padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(o.name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        if (active == o.id) Text("aktiv", style = MaterialTheme.typography.labelSmall, color = Desk.Green, modifier = Modifier.padding(end = 8.dp))
+                        TextButton(onClick = { rename = o }) { Text("Umbenennen") }
+                        TextButton(onClick = { delete = o }) { Text("Löschen", color = Desk.Red) }
+                    }
+                    Text("${o.desks.count { id -> desks.any { it.id == id } }} von ${desks.size} Bedienfeldern sichtbar",
+                        style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
+                    desks.forEach { d ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(d.name.ifBlank { "Bedienfeld" }, modifier = Modifier.weight(1f))
+                            Switch(checked = d.id in o.desks, onCheckedChange = { on ->
+                                store.updateOccasion(o.copy(desks = if (on) o.desks + d.id else o.desks - d.id))
+                            })
+                        }
+                    }
+                }
+            }
+            OutlinedButton(onClick = { newOcc = true }) { Text("+ Anlass") }
+        }
+    }
+    if (newOcc) RenameDialog("Neuer Anlass", "", { name -> store.addOccasion(name); newOcc = false }) { newOcc = false }
+    rename?.let { o -> RenameDialog("Anlass umbenennen", o.name, { name -> store.updateOccasion(o.copy(name = name)); rename = null }) { rename = null } }
+    delete?.let { o ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { delete = null },
+            title = { Text("Anlass „${o.name}“ löschen?") },
+            text = { Text("Die Bedienfelder selbst bleiben erhalten.") },
+            confirmButton = { TextButton(onClick = { store.deleteOccasion(o.id); delete = null }) { Text("Löschen", color = Desk.Red) } },
+            dismissButton = { TextButton(onClick = { delete = null }) { Text("Abbrechen") } }
+        )
     }
 }

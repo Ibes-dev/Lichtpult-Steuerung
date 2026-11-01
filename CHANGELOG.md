@@ -4,6 +4,7 @@
 - **Designs:** Dunkel, Schwarz (OLED), Klassisch (Pult), Modern und Hell – unter System → Projekt → Design.
 - **Bedienfeld im Vollbild:** ohne Leisten, Bildschirm bleibt an, Verbindungspunkt und Beenden oben rechts.
 - **Neue Bedienfeld-Elemente:** Drehregler, XY-Feld (X und Y als zwei Eingänge), Auswahl (Optionen wie Szene A/B/C), Cuelist-Monitor (Zustand, aktueller/nächster Cue, Go/Zurück/Stop), Cuelist-Auswahl (antippen = Go, lange drücken = Stop), Geräte-Auswahl (Gruppen oder Einzelgeräte für den Programmer), Uhr.
+- **Anlässe** unter System → Bedienfeld: festlegen, welche Bedienfelder z. B. bei „Konzert“ oder „Fasnet“ sichtbar sind; ausgeblendete bleiben in DMXControl angemeldet. Anlässe werden mit exportiert.
 - **Mehr Gestaltung je Element:** eigene Farbe (#RRGGBB), Schriftgröße S–XXL, Beschriftung ausblenden, farbiger Rahmen. Das Raster bleibt.
 - **3D-Bühne:** Gobos je Gobo-Nummer unterschiedlich dargestellt, mit Gobo-Rotation und -Indexierung.
 

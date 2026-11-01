@@ -106,12 +106,63 @@ data class FeedbackRules(val onWords: List<String> = DEFAULT_ON, val threshold: 
  * damit Verdrahtungen in der DMXC3-Eingangszuweisung erhalten bleiben. Ältere Daten (0.2.0)
  * werden beim Laden übernommen und automatisch im Raster platziert.
  */
+/**
+ * Anlass (z. B. "Konzert", "Fasnet"): welche Bedienfelder sichtbar sind. Ausgeblendete Bedienfelder
+ * bleiben in DMXControl angemeldet – ihre Verbindungen in der Zuweisung bleiben erhalten.
+ */
+data class Occasion(val id: String, val name: String, val desks: Set<String>)
+
 class SoftdeskStore(context: Context) {
     private val sp = context.getSharedPreferences("softdesk", Context.MODE_PRIVATE)
     private val _desks = MutableStateFlow(loadDesks())
     val desks: StateFlow<List<Softdesk>> = _desks.asStateFlow()
     private val _rules = MutableStateFlow(loadRules())
     val rules: StateFlow<FeedbackRules> = _rules.asStateFlow()
+
+    // ---------------------------------------------------------------- Anlässe
+    private val _occasions = MutableStateFlow(loadOccasions())
+    val occasions: StateFlow<List<Occasion>> = _occasions.asStateFlow()
+    private val _activeOccasion = MutableStateFlow(sp.getString("activeOccasion", null))
+    /** Gewählter Anlass; null = alle Bedienfelder sichtbar. */
+    val activeOccasion: StateFlow<String?> = _activeOccasion.asStateFlow()
+
+    /** Sichtbare Bedienfelder im gewählten Anlass (Reihenfolge wie angelegt). */
+    fun visible(desks: List<Softdesk>, occs: List<Occasion>, active: String?): List<Softdesk> {
+        val o = occs.firstOrNull { it.id == active } ?: return desks
+        return desks.filter { it.id in o.desks }
+    }
+
+    private fun occasionsJson(list: List<Occasion>) = JSONArray().apply {
+        list.forEach { o -> put(JSONObject().put("id", o.id).put("name", o.name).put("desks", JSONArray(o.desks.toList()))) }
+    }
+
+    private fun parseOccasions(arr: JSONArray) = (0 until arr.length()).map { i ->
+        val o = arr.getJSONObject(i); val d = o.optJSONArray("desks") ?: JSONArray()
+        Occasion(o.getString("id"), o.optString("name", "Anlass"), (0 until d.length()).map { d.getString(it) }.toSet())
+    }
+
+    private fun loadOccasions(): List<Occasion> = runCatching { parseOccasions(JSONArray(sp.getString("occasions", "[]"))) }.getOrDefault(emptyList())
+
+    private fun saveOccasions(list: List<Occasion>) {
+        sp.edit().putString("occasions", occasionsJson(list).toString()).apply()
+        _occasions.value = list
+        if (_activeOccasion.value != null && list.none { it.id == _activeOccasion.value }) setActiveOccasion(null)
+    }
+
+    fun setActiveOccasion(id: String?) {
+        sp.edit().putString("activeOccasion", id).apply()
+        _activeOccasion.value = id
+    }
+
+    /** Neuer Anlass – zu Beginn mit allen vorhandenen Bedienfeldern. */
+    fun addOccasion(name: String): String {
+        val id = UUID.randomUUID().toString().take(8)
+        saveOccasions(_occasions.value + Occasion(id, name, _desks.value.map { it.id }.toSet()))
+        return id
+    }
+
+    fun updateOccasion(o: Occasion) = saveOccasions(_occasions.value.map { if (it.id == o.id) o else it })
+    fun deleteOccasion(id: String) = saveOccasions(_occasions.value.filterNot { it.id == id })
 
     // ---------------------------------------------------------------- Laden/Speichern
     private fun loadRules(): FeedbackRules = runCatching {
@@ -221,6 +272,7 @@ class SoftdeskStore(context: Context) {
         put("exported", System.currentTimeMillis())
         put("rules", JSONObject().apply { put("on", JSONArray(_rules.value.onWords)); put("threshold", _rules.value.threshold) })
         put("desks", desksJson(_desks.value))
+        put("occasions", occasionsJson(_occasions.value))
     }.toString(2)
 
     /**
@@ -237,6 +289,10 @@ class SoftdeskStore(context: Context) {
         val result = if (replace) imported
         else _desks.value.filter { d -> imported.none { it.id == d.id } } + imported
         save(result)
+        root.optJSONArray("occasions")?.let { arr ->
+            val imp = parseOccasions(arr)
+            saveOccasions(if (replace) imp else _occasions.value.filter { o -> imp.none { it.id == o.id } } + imp)
+        }
         root.optJSONObject("rules")?.let { r ->
             val arr = r.getJSONArray("on")
             setRules(FeedbackRules((0 until arr.length()).map { arr.getString(it) }, r.optDouble("threshold", 0.5)))
@@ -285,6 +341,8 @@ class SoftdeskStore(context: Context) {
     fun addDesk(name: String): String {
         val id = UUID.randomUUID().toString().take(8)
         save(_desks.value + Softdesk(id, name))
+        // im gewählten Anlass gleich sichtbar, sonst wäre es nach dem Anlegen verschwunden
+        _activeOccasion.value?.let { a -> _occasions.value.firstOrNull { it.id == a }?.let { updateOccasion(it.copy(desks = it.desks + id)) } }
         return id
     }
 
@@ -295,7 +353,10 @@ class SoftdeskStore(context: Context) {
         d.copy(cols = d.cols.coerceIn(maxOf(1, minCols), 24), rows = d.rows.coerceIn(maxOf(1, minRows), 40))
     }
 
-    fun deleteDesk(id: String) = save(_desks.value.filterNot { it.id == id })
+    fun deleteDesk(id: String) {
+        save(_desks.value.filterNot { it.id == id })
+        saveOccasions(_occasions.value.map { it.copy(desks = it.desks - id) })
+    }
 
     fun newElement(deskId: String, type: SdType, x: Int, y: Int): SdElement? {
         val d = _desks.value.firstOrNull { it.id == deskId } ?: return null
