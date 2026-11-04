@@ -15,7 +15,7 @@
 ## Behoben
 - Bedienfeld: Werte aus der Zuweisung wurden falsch oder gar nicht gelesen (z. B. von Konstante, Binary Switcher oder Intensity des Programmer-Bausteins); Fader und Anzeigen folgen jetzt auch ohne Rule of Three.
 - 3D-Bühne: Gobos von Moving Heads wurden nicht erkannt, wenn das Gerät auch Goborotation/Goboindex hat, oder bei mehreren Gobo-Rädern.
-- Fehlermeldung „ProgrammerChanges … has faulted“ im Umbra-Log beim Verbinden.
+- Fehlermeldungen im Umbra-Log beim Verbinden („ProgrammerChanges … has faulted“) und beim Trennen („The client reset the request stream“): Die App meldet sich jetzt sauber ab.
 
 # Lichtpult Remote 1.3.0
 

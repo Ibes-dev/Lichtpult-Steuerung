@@ -304,7 +304,8 @@ class UmbraSession(
         val sentAt = java.util.concurrent.ConcurrentHashMap<Long, Long>()
         val sender = launch {
             var counter = 0L
-            while (isActive) {
+            launch { closing.first { it }; outgoing.close() }   // Sendeseite regulär schließen
+            while (isActive && !closing.value) {
                 counter++
                 sentAt[counter] = System.nanoTime()
                 if (sentAt.size > 20) sentAt.keys.sorted().take(sentAt.size - 20).forEach { sentAt.remove(it) }
@@ -326,7 +327,31 @@ class UmbraSession(
             }
         }
         sender.cancel()
+        // gewolltes Trennen: nicht als Fehler werten (sonst würde neu verbunden), auf den Abbruch warten
+        if (closing.value) kotlinx.coroutines.awaitCancellation()
         throw UmbraException("Ping-Stream vom Server beendet")
+    }
+
+    /**
+     * Wird beim gewollten Trennen gesetzt: Bidirektionale Streams (Ping, Cuelist-Fortschritt) beenden
+     * dann ihre Sendeseite regulär, statt dass der Kanal sie hart abreißt. Sonst meldet Umbra
+     * "The client reset the request stream" im Log.
+     */
+    val closing = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    /**
+     * Sauber trennen, bevor die Sitzung abgebrochen wird: Sendeseiten schließen, kurz warten, Logoff.
+     * Danach kann der Aufrufer die Sitzungs-Coroutine abbrechen; [close] meldet sich dann nicht doppelt ab.
+     */
+    suspend fun closeGracefully(): Unit = withContext(NonCancellable) {
+        closing.value = true
+        delay(250)
+        if (sessionId != null) {
+            withTimeoutOrNull(1_500) {
+                runCatching { clientStub.logoff(UmbraLogoffRequest.newBuilder().setClient(programInfo()).build(), headers) }
+            }
+            sessionId = null
+        }
     }
 
     /** Best-effort Logoff + Kanal schließen. */

@@ -367,10 +367,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun disconnect() {
-        sessionJob?.cancel()
+        val s = _session.value
+        val job = sessionJob
         sessionJob = null
         _conn.value = ConnState.Idle
-        startDiscovery()
+        viewModelScope.launch {
+            // erst sauber abmelden (Streams schließen, Logoff), dann die Sitzung abbrechen
+            s?.closeGracefully()
+            job?.cancel()
+            startDiscovery()
+        }
     }
 
     /** Freigabe anfragen: Client erscheint in der DMXC3-Netzwerkverwaltung; zugewiesene NetID wird übernommen. */
