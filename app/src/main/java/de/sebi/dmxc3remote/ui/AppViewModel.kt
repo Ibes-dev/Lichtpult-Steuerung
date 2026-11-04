@@ -92,8 +92,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val micToDmxc = MutableStateFlow(prefs.micToDmxc)
     val cuelistCompact = MutableStateFlow(prefs.cuelistCompact)
     val masterCompact = MutableStateFlow(prefs.masterCompact)
-    /** Bedienfeld im Vollbild (ohne Leisten, Bildschirm bleibt an). */
-    val softdeskFullscreen = MutableStateFlow(false)
+    /**
+     * Bedienfeld im Vollbild (ohne Leisten, Bildschirm bleibt an). Liegt wie der aktuelle Bereich im
+     * ViewModel: Nach einer Unterbrechung (z. B. Display gesperrt) und dem automatischen Neuverbinden
+     * geht es im Vollbild weiter.
+     */
+    val softdeskFullscreen = MutableStateFlow(prefs.softdeskFullscreen)
+    /** Zuletzt geöffneter Bereich (Name aus Dest). */
+    val currentDest = MutableStateFlow(prefs.lastDest)
+
+    init {
+        // Bereich und Vollbild merken (auch falls Android die App im Hintergrund beendet)
+        viewModelScope.launch { softdeskFullscreen.collect { prefs.softdeskFullscreen = it } }
+        viewModelScope.launch { currentDest.collect { prefs.lastDest = it } }
+    }
+
     val navOrder = MutableStateFlow(prefs.navOrder)
     val goCuelistId = MutableStateFlow(prefs.goCuelistId)
     val volumeKeysGo = MutableStateFlow(prefs.volumeKeysGo)

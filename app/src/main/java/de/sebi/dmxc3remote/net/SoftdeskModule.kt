@@ -436,7 +436,7 @@ fun ObjectData.asDouble(): Double? = when (valueCase) {
         is Boolean -> if (m) 1.0 else 0.0
         is Number -> m.toDouble()
         is String -> m.trim().replace(',', '.').toDoubleOrNull()
-        else -> fallback()?.number?.toDouble()
+        else -> fannedNumber(this) ?: fallback()?.number?.toDouble()
     }
     else -> text().trim().replace(',', '.').toDoubleOrNull()
 }

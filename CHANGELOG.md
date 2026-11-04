@@ -2,7 +2,7 @@
 
 ## Neu
 - **Designs:** Dunkel, Schwarz (OLED), Klassisch (Pult), Modern und Hell – unter System → Projekt → Design.
-- **Bedienfeld im Vollbild:** ohne Leisten, Bildschirm bleibt an, Verbindungspunkt und Beenden oben rechts.
+- **Bedienfeld im Vollbild:** ohne Leisten, Bildschirm bleibt an, Verbindungspunkt und Beenden oben rechts. Nach einer Unterbrechung (z. B. Display gesperrt) und dem automatischen Neuverbinden geht es im Vollbild weiter; die App merkt sich generell den zuletzt geöffneten Bereich.
 - **Neue Bedienfeld-Elemente:** Drehregler, XY-Feld (X und Y als zwei Eingänge), Auswahl (Optionen wie Szene A/B/C), Cuelist-Monitor (Zustand, aktueller/nächster Cue, Go/Zurück/Stop), Cuelist-Auswahl (antippen = Go, lange drücken = Stop), Geräte-Auswahl (Gruppen oder Einzelgeräte für den Programmer), Uhr.
 - **Anlässe** unter System → Bedienfeld: festlegen, welche Bedienfelder z. B. bei „Konzert“ oder „Fasnet“ sichtbar sind; ausgeblendete bleiben in DMXControl angemeldet. Anlässe werden mit exportiert.
 - **Mehr Gestaltung je Element:** eigene Farbe (#RRGGBB), Schriftgröße S–XXL, Beschriftung ausblenden, farbiger Rahmen. Das Raster bleibt.
@@ -11,7 +11,7 @@
 ## Behoben
 - 3D-Bühne: Gobos von Moving Heads wurden nicht erkannt, wenn das Gerät auch Goborotation/Goboindex hat, oder bei mehreren Gobo-Rädern.
 - Programmer-Änderungen wurden doppelt abonniert (Fehlermeldung im Umbra-Log).
-- Bedienfeld: Werte aus der Zuweisung (z. B. 0 von einer Konstante oder einem Binary Switcher) wurden falsch gelesen; Fader und Anzeigen zeigen jetzt den richtigen Wert.
+- Bedienfeld: Werte aus der Zuweisung wurden falsch oder gar nicht gelesen (MultiTypeValue, z. B. von Konstante oder Binary Switcher, und NumericFannedValue, z. B. Intensity des Programmer-Bausteins); Fader und Anzeigen folgen jetzt auch ohne Rule of Three.
 
 # Lichtpult Remote 1.3.1
 

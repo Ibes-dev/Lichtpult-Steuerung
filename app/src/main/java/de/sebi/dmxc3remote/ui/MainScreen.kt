@@ -110,7 +110,10 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
     val orderStr by vm.navOrder.collectAsStateWithLifecycle()
     val order = remember(orderStr) { orderOf(orderStr) }
     val phonePrimary = remember(order) { order.take(PHONE_SLOTS) + Dest.MORE }
-    var destName by rememberSaveable { mutableStateOf(order.first().name) }
+    // Aktueller Bereich im ViewModel: übersteht das Neuverbinden (währenddessen ist der
+    // Verbindungsbildschirm zu sehen und dieser Bildschirm wird verlassen)
+    val savedDest by vm.currentDest.collectAsStateWithLifecycle()
+    val destName = savedDest?.takeIf { n -> Dest.entries.any { it.name == n } } ?: order.first().name
     val dest = Dest.valueOf(destName)
     val wide = isWide()
 
@@ -133,7 +136,7 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
                         (order + Dest.MORE).forEach { d ->
                             NavigationRailItem(
                                 selected = dest == d,
-                                onClick = { destName = d.name },
+                                onClick = { vm.currentDest.value = d.name },
                                 icon = { Icon(d.icon, contentDescription = null) },
                                 label = { Text(d.label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                             )
@@ -142,7 +145,7 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
                     VerticalDivider(color = Desk.Line)
                 }
                 Box(Modifier.weight(1f).fillMaxSize()) {
-                    Content(dest, vm, session, order) { destName = it.name }
+                    Content(dest, vm, session, order) { vm.currentDest.value = it.name }
                 }
             }
             if (!wide) {
@@ -151,7 +154,7 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
                         val selected = dest == d || (d == Dest.MORE && dest !in phonePrimary)
                         NavigationBarItem(
                             selected = selected,
-                            onClick = { destName = d.name },
+                            onClick = { vm.currentDest.value = d.name },
                             icon = { Icon(d.icon, contentDescription = null) },
                             label = { Text(d.label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         )

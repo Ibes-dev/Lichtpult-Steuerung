@@ -71,6 +71,12 @@ fun ObjectData.fallback(): FallbackValue? {
         return FallbackValue("MultiTypeValue", n, DotNetValue.multiText(this))
     }
     DotNetValue.parsePoint(this)?.let { (x, y) -> return FallbackValue("Point", null, "$x, $y") }
+    // NumericFannedValue (z. B. Intensity aus dem Programmer-Baustein der Zuweisung): Zahl im
+    // FannedPropertyValue – belegt durch die Bedienfeld-Diagnose vom 01.11.2026
+    if (fallbackCase == ObjectData.FallbackCase.FALLBACKPROTOBUF) fannedNumber(this)?.let { n ->
+        val t = java.math.BigDecimal(n).setScale(4, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
+        return FallbackValue("NumericFannedValue", Math.round(n).toInt(), t)
+    }
     val typeAq = fallbackTypeAQ.ifBlank { protobufTypeAQ }
     val typeName = typeAq.substringBefore(',').substringAfterLast('.').substringAfterLast('+')
     val bytes = when (fallbackCase) {
@@ -156,4 +162,15 @@ class Throttler {
             }
         }
     }
+}
+
+
+/** Erster Zahlenwert eines FannedPropertyValue im Protobuf-Anhang (fannedValues, sonst parameterValues). */
+fun fannedNumber(v: ObjectData): Double? {
+    // nur echte Fächerwerte – andere Protobuf-Anhänge (z. B. Enums) nicht als Fächer deuten
+    if (!(v.fallbackTypeAQ + " " + v.protobufTypeAQ).contains("FannedValue", true)) return null
+    val f = fpvOf(v) ?: return null
+    f.fannedValuesList.firstOrNull { it.valueCase == LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.DOUBLEVALUE }
+        ?.let { return it.doubleValue }
+    return f.parameterValuesList.firstOrNull()?.replace(',', '.')?.toDoubleOrNull()
 }

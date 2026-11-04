@@ -121,4 +121,15 @@ class NetTest {
         assertEquals(1.0, tpl.asDouble())
         assertEquals("0", DotNetValue.buildMulti(tpl, 0)!!.text())
     }
+
+    @Test
+    fun numericFannedValueAsFeedback() {
+        // Intensity aus dem Programmer-Baustein: NumericFannedValue im fallbackProtobuf
+        val fpv = LumosProtobuf.DeviceServiceTypes.FannedPropertyValue.newBuilder()
+            .addFannedValues(LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.newBuilder().setDoubleValue(100.0)).build()
+        val v = ObjectData.newBuilder().setFallbackProtobuf(fpv.toByteString())
+            .setFallbackTypeAQ("LumosLIB.Kernel.Scene.Fanning.NumericFannedValue, LumosLIB").build()
+        assertEquals(100.0, v.asDouble())
+        assertEquals("100", v.text())
+    }
 }
