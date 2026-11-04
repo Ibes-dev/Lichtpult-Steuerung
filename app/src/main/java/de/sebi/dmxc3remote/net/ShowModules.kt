@@ -39,6 +39,7 @@ import LumosProtobufClient.MasterClientGrpcKt.MasterClientCoroutineStub
 import LumosProtobufClient.TimecodeClientGrpcKt.TimecodeClientCoroutineStub
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -409,12 +410,15 @@ class CuelistModule(s: UmbraSession) : Module(s, "Cuelists") {
             runCatching {
                 val requests = kotlinx.coroutines.flow.flow {
                     var last: Set<String> = emptySet()
-                    _items.collect { m ->
-                        if (m.keys != last) {
-                            last = m.keys
-                            emit(CuelistProgressStateChangeRequest.newBuilder().addAllCuelistIds(m.keys).build())
+                    // endet regulär, sobald die Sitzung sauber getrennt wird (kein "reset" im Umbra-Log)
+                    kotlinx.coroutines.flow.combine(_items, s.closing) { m, c -> m to c }
+                        .takeWhile { !it.second }
+                        .collect { (m, _) ->
+                            if (m.keys != last) {
+                                last = m.keys
+                                emit(CuelistProgressStateChangeRequest.newBuilder().addAllCuelistIds(m.keys).build())
+                            }
                         }
-                    }
                 }
                 stub.receiveCuelistProgressChanges(requests, s.headers).collect { msg ->
                     _progress.update { it + (msg.cuelistId to msg) }

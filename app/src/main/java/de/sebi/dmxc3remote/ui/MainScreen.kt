@@ -52,6 +52,8 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -108,10 +110,18 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
     val orderStr by vm.navOrder.collectAsStateWithLifecycle()
     val order = remember(orderStr) { orderOf(orderStr) }
     val phonePrimary = remember(order) { order.take(PHONE_SLOTS) + Dest.MORE }
-    var destName by rememberSaveable { mutableStateOf(order.first().name) }
+    // Aktueller Bereich im ViewModel: übersteht das Neuverbinden (währenddessen ist der
+    // Verbindungsbildschirm zu sehen und dieser Bildschirm wird verlassen)
+    val savedDest by vm.currentDest.collectAsStateWithLifecycle()
+    val destName = savedDest?.takeIf { n -> Dest.entries.any { it.name == n } } ?: order.first().name
     val dest = Dest.valueOf(destName)
     val wide = isWide()
 
+    val fullscreen by vm.softdeskFullscreen.collectAsStateWithLifecycle()
+    if (fullscreen && dest == Dest.SOFT) {
+        SoftdeskFullscreen(vm, session) { vm.softdeskFullscreen.value = false }
+        return
+    }
     Box(modifier.background(Desk.Surface)) {
         Column(Modifier.fillMaxSize()) {
             TopBar(vm, session, target)
@@ -126,7 +136,7 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
                         (order + Dest.MORE).forEach { d ->
                             NavigationRailItem(
                                 selected = dest == d,
-                                onClick = { destName = d.name },
+                                onClick = { vm.currentDest.value = d.name },
                                 icon = { Icon(d.icon, contentDescription = null) },
                                 label = { Text(d.label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                             )
@@ -135,7 +145,7 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
                     VerticalDivider(color = Desk.Line)
                 }
                 Box(Modifier.weight(1f).fillMaxSize()) {
-                    Content(dest, vm, session, order) { destName = it.name }
+                    Content(dest, vm, session, order) { vm.currentDest.value = it.name }
                 }
             }
             if (!wide) {
@@ -144,7 +154,7 @@ fun MainScreen(vm: AppViewModel, session: UmbraSession, target: UmbraTarget, mod
                         val selected = dest == d || (d == Dest.MORE && dest !in phonePrimary)
                         NavigationBarItem(
                             selected = selected,
-                            onClick = { destName = d.name },
+                            onClick = { vm.currentDest.value = d.name },
                             icon = { Icon(d.icon, contentDescription = null) },
                             label = { Text(d.label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         )
@@ -161,7 +171,7 @@ private fun Content(dest: Dest, vm: AppViewModel, s: UmbraSession, order: List<D
     when (dest) {
         Dest.EXEC -> ExecutorScreen(s)
         Dest.CUE -> CuelistScreen(s, vm)
-        Dest.SOFT -> SoftdeskScreen(s, vm.softdesks, vm.midi)
+        Dest.SOFT -> SoftdeskScreen(s, vm.softdesks, vm.midi, onFullscreen = { vm.softdeskFullscreen.value = true })
         Dest.PROG -> ProgrammerScreen(s)
         Dest.MASTER -> MasterScreen(s, vm)
         Dest.MACRO -> MacroScreen(s)
@@ -330,5 +340,43 @@ private fun GlobalToggle(label: String, on: Boolean, color: Color, modifier: Mod
             style = MaterialTheme.typography.labelLarge,
             color = if (on) Color.Black else Desk.Text
         )
+    }
+}
+
+
+/**
+ * Bedienfeld im Vollbild: ohne Kopf- und Navigationsleiste, Systemleisten ausgeblendet,
+ * Bildschirm bleibt an. Beenden über die Taste oben rechts oder die Zurück-Geste.
+ */
+@Composable
+private fun SoftdeskFullscreen(vm: AppViewModel, session: UmbraSession, onExit: () -> Unit) {
+    val view = androidx.compose.ui.platform.LocalView.current
+    DisposableEffect(Unit) {
+        val window = (view.context as? android.app.Activity)?.window
+        val ctl = window?.let { androidx.core.view.WindowCompat.getInsetsController(it, view) }
+        ctl?.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        ctl?.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        view.keepScreenOn = true
+        onDispose {
+            ctl?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            view.keepScreenOn = false
+        }
+    }
+    androidx.activity.compose.BackHandler(onBack = onExit)
+    val conn by vm.conn.collectAsStateWithLifecycle()
+    Box(Modifier.fillMaxSize().background(Desk.Surface)) {
+        SoftdeskScreen(session, vm.softdesks, vm.midi, fullscreen = true)
+        Row(
+            Modifier.align(Alignment.TopEnd).padding(6.dp).clip(RoundedCornerShape(16.dp))
+                .background(Desk.Panel.copy(alpha = 0.85f)).padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Verbindungspunkt, damit ein Abbruch auch im Vollbild auffällt
+            Box(Modifier.padding(start = 8.dp).size(10.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                .background(if (conn is ConnState.Connected) Desk.Green else Desk.Red))
+            IconButton(onClick = onExit, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Filled.FullscreenExit, contentDescription = "Vollbild beenden", tint = Desk.TextDim)
+            }
+        }
     }
 }

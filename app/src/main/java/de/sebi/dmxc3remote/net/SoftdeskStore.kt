@@ -14,8 +14,18 @@ enum class SdType(val label: String, val hasSource: Boolean, val hasSink: Boolea
     FADER("Fader", true, true),
     LED("LED", false, true),
     DISPLAY("Anzeige", false, true),
-    TEXT("Beschriftung", false, false)
+    TEXT("Beschriftung", false, false),
+    ROTARY("Drehregler", true, true),
+    XY("XY-Feld", true, false),
+    RADIO("Auswahl", true, true),
+    CUELIST_MONITOR("Cuelist-Monitor", false, false),
+    CUELIST_SELECTOR("Cuelist-Auswahl", false, false),
+    DEVICE_SELECTOR("Geräte-Auswahl", false, false),
+    CLOCK("Uhr", false, false)
 }
+
+/** Elemente, die einen Zahlenwert senden (Bereich min..max). */
+val SdType.numeric get() = this == SdType.FADER || this == SdType.ROTARY || this == SdType.XY
 
 /** Werttyp eines Ein- oder Ausgangs (entspricht EWellKnownInputType BOOL/NUMERIC/STRING). */
 enum class SdIo(val label: String) { BOOL("Ein/Aus"), NUMERIC("Zahl"), STRING("Text") }
@@ -46,8 +56,33 @@ data class SdElement(
     val midi: String = "",
     /** Velocity für LED an/aus (z. B. APC mini mk2: Farbindex). */
     val midiOn: Int = 127,
-    val midiOff: Int = 0
+    val midiOff: Int = 0,
+    /** Auswahl: eine Option je Zeile "Beschriftung=Wert" (ohne "=": Wert = Beschriftung). */
+    val options: String = "",
+    /** Ziel: Cuelist-ID (Monitor), "devices" für Einzelgeräte (Geräte-Auswahl). */
+    val target: String = "",
+    /** Schriftgröße relativ (0.8 … 2.0). */
+    val textScale: Float = 1f,
+    /** Beschriftung ausblenden. */
+    val hideLabel: Boolean = false,
+    /** Nur Umriss statt Fläche (Tasten, Anzeigen). */
+    val outline: Boolean = false,
+    /** Eigene Farbe als #RRGGBB, überschreibt die Palette. */
+    val colorHex: String = ""
 )
+
+/** Optionen eines Auswahl-Elements als (Beschriftung, Wert). */
+fun SdElement.optionList(): List<Pair<String, String>> = options.lines().map { it.trim() }.filter { it.isNotEmpty() }.map { l ->
+    val i = l.indexOf('=')
+    if (i < 0) l to l else l.substring(0, i).trim() to l.substring(i + 1).trim()
+}
+
+/**
+ * Eingangsquellen eines Elements in DMXControl. Das XY-Feld meldet zwei: X unter der Element-ID,
+ * Y unter "<ID>_y" – beide als Zahl im Bereich min..max.
+ */
+fun SdElement.virtualSources(): List<SdElement> =
+    if (type == SdType.XY) listOf(copy(name = "$name X"), copy(id = "${id}_y", name = "$name Y")) else listOf(this)
 
 data class Softdesk(
     val id: String,
@@ -71,12 +106,63 @@ data class FeedbackRules(val onWords: List<String> = DEFAULT_ON, val threshold: 
  * damit Verdrahtungen in der DMXC3-Eingangszuweisung erhalten bleiben. Ältere Daten (0.2.0)
  * werden beim Laden übernommen und automatisch im Raster platziert.
  */
+/**
+ * Anlass (z. B. "Konzert", "Fasnet"): welche Bedienfelder sichtbar sind. Ausgeblendete Bedienfelder
+ * bleiben in DMXControl angemeldet – ihre Verbindungen in der Zuweisung bleiben erhalten.
+ */
+data class Occasion(val id: String, val name: String, val desks: Set<String>)
+
 class SoftdeskStore(context: Context) {
     private val sp = context.getSharedPreferences("softdesk", Context.MODE_PRIVATE)
     private val _desks = MutableStateFlow(loadDesks())
     val desks: StateFlow<List<Softdesk>> = _desks.asStateFlow()
     private val _rules = MutableStateFlow(loadRules())
     val rules: StateFlow<FeedbackRules> = _rules.asStateFlow()
+
+    // ---------------------------------------------------------------- Anlässe
+    private val _occasions = MutableStateFlow(loadOccasions())
+    val occasions: StateFlow<List<Occasion>> = _occasions.asStateFlow()
+    private val _activeOccasion = MutableStateFlow(sp.getString("activeOccasion", null))
+    /** Gewählter Anlass; null = alle Bedienfelder sichtbar. */
+    val activeOccasion: StateFlow<String?> = _activeOccasion.asStateFlow()
+
+    /** Sichtbare Bedienfelder im gewählten Anlass (Reihenfolge wie angelegt). */
+    fun visible(desks: List<Softdesk>, occs: List<Occasion>, active: String?): List<Softdesk> {
+        val o = occs.firstOrNull { it.id == active } ?: return desks
+        return desks.filter { it.id in o.desks }
+    }
+
+    private fun occasionsJson(list: List<Occasion>) = JSONArray().apply {
+        list.forEach { o -> put(JSONObject().put("id", o.id).put("name", o.name).put("desks", JSONArray(o.desks.toList()))) }
+    }
+
+    private fun parseOccasions(arr: JSONArray) = (0 until arr.length()).map { i ->
+        val o = arr.getJSONObject(i); val d = o.optJSONArray("desks") ?: JSONArray()
+        Occasion(o.getString("id"), o.optString("name", "Anlass"), (0 until d.length()).map { d.getString(it) }.toSet())
+    }
+
+    private fun loadOccasions(): List<Occasion> = runCatching { parseOccasions(JSONArray(sp.getString("occasions", "[]"))) }.getOrDefault(emptyList())
+
+    private fun saveOccasions(list: List<Occasion>) {
+        sp.edit().putString("occasions", occasionsJson(list).toString()).apply()
+        _occasions.value = list
+        if (_activeOccasion.value != null && list.none { it.id == _activeOccasion.value }) setActiveOccasion(null)
+    }
+
+    fun setActiveOccasion(id: String?) {
+        sp.edit().putString("activeOccasion", id).apply()
+        _activeOccasion.value = id
+    }
+
+    /** Neuer Anlass – zu Beginn mit allen vorhandenen Bedienfeldern. */
+    fun addOccasion(name: String): String {
+        val id = UUID.randomUUID().toString().take(8)
+        saveOccasions(_occasions.value + Occasion(id, name, _desks.value.map { it.id }.toSet()))
+        return id
+    }
+
+    fun updateOccasion(o: Occasion) = saveOccasions(_occasions.value.map { if (it.id == o.id) o else it })
+    fun deleteOccasion(id: String) = saveOccasions(_occasions.value.filterNot { it.id == id })
 
     // ---------------------------------------------------------------- Laden/Speichern
     private fun loadRules(): FeedbackRules = runCatching {
@@ -141,7 +227,13 @@ class SoftdeskStore(context: Context) {
             showValue = e.optBoolean("showValue", type == SdType.DISPLAY),
             midi = e.optString("midi", ""),
             midiOn = e.optInt("midiOn", 127),
-            midiOff = e.optInt("midiOff", 0)
+            midiOff = e.optInt("midiOff", 0),
+            options = e.optString("options", ""),
+            target = e.optString("target", ""),
+            textScale = e.optDouble("textScale", 1.0).toFloat(),
+            hideLabel = e.optBoolean("hideLabel", false),
+            outline = e.optBoolean("outline", false),
+            colorHex = e.optString("colorHex", "")
         )
         return el to hasPos
     }
@@ -152,6 +244,8 @@ class SoftdeskStore(context: Context) {
         put("mode", e.mode.name); put("sendIo", e.sendIo.name); put("onValue", e.onValue); put("offValue", e.offValue)
         put("min", e.min); put("max", e.max); put("fbIo", e.fbIo.name); put("fbOn", e.fbOn); put("showValue", e.showValue)
         put("midi", e.midi); put("midiOn", e.midiOn); put("midiOff", e.midiOff)
+        put("options", e.options); put("target", e.target); put("textScale", e.textScale.toDouble())
+        put("hideLabel", e.hideLabel); put("outline", e.outline); put("colorHex", e.colorHex)
     }
 
     private fun desksJson(list: List<Softdesk>): JSONArray {
@@ -178,6 +272,7 @@ class SoftdeskStore(context: Context) {
         put("exported", System.currentTimeMillis())
         put("rules", JSONObject().apply { put("on", JSONArray(_rules.value.onWords)); put("threshold", _rules.value.threshold) })
         put("desks", desksJson(_desks.value))
+        put("occasions", occasionsJson(_occasions.value))
     }.toString(2)
 
     /**
@@ -194,6 +289,10 @@ class SoftdeskStore(context: Context) {
         val result = if (replace) imported
         else _desks.value.filter { d -> imported.none { it.id == d.id } } + imported
         save(result)
+        root.optJSONArray("occasions")?.let { arr ->
+            val imp = parseOccasions(arr)
+            saveOccasions(if (replace) imp else _occasions.value.filter { o -> imp.none { it.id == o.id } } + imp)
+        }
         root.optJSONObject("rules")?.let { r ->
             val arr = r.getJSONArray("on")
             setRules(FeedbackRules((0 until arr.length()).map { arr.getString(it) }, r.optDouble("threshold", 0.5)))
@@ -242,6 +341,8 @@ class SoftdeskStore(context: Context) {
     fun addDesk(name: String): String {
         val id = UUID.randomUUID().toString().take(8)
         save(_desks.value + Softdesk(id, name))
+        // im gewählten Anlass gleich sichtbar, sonst wäre es nach dem Anlegen verschwunden
+        _activeOccasion.value?.let { a -> _occasions.value.firstOrNull { it.id == a }?.let { updateOccasion(it.copy(desks = it.desks + id)) } }
         return id
     }
 
@@ -252,25 +353,38 @@ class SoftdeskStore(context: Context) {
         d.copy(cols = d.cols.coerceIn(maxOf(1, minCols), 24), rows = d.rows.coerceIn(maxOf(1, minRows), 40))
     }
 
-    fun deleteDesk(id: String) = save(_desks.value.filterNot { it.id == id })
+    fun deleteDesk(id: String) {
+        save(_desks.value.filterNot { it.id == id })
+        saveOccasions(_occasions.value.map { it.copy(desks = it.desks - id) })
+    }
 
     fun newElement(deskId: String, type: SdType, x: Int, y: Int): SdElement? {
         val d = _desks.value.firstOrNull { it.id == deskId } ?: return null
-        val h = if (type == SdType.FADER) minOf(3, d.rows - y).coerceAtLeast(1) else 1
+        val h = when (type) {
+            SdType.FADER -> minOf(3, d.rows - y).coerceAtLeast(1)
+            SdType.XY, SdType.CUELIST_SELECTOR, SdType.DEVICE_SELECTOR -> minOf(2, d.rows - y).coerceAtLeast(1)
+            SdType.ROTARY, SdType.CUELIST_MONITOR -> minOf(2, d.rows - y).coerceAtLeast(1)
+            else -> 1
+        }
+        val w = when (type) {
+            SdType.XY, SdType.CUELIST_MONITOR, SdType.CUELIST_SELECTOR, SdType.DEVICE_SELECTOR, SdType.RADIO -> minOf(2, d.cols - x).coerceAtLeast(1)
+            else -> 1
+        }
         val count = d.elements.count { it.type == type } + 1
         val e = SdElement(
             id = UUID.randomUUID().toString().take(8),
             type = type,
             name = "${type.label} $count",
-            x = x, y = y, w = 1, h = h,
+            x = x, y = y, w = w, h = h,
             color = d.elements.size % 6,
-            sendIo = if (type == SdType.FADER) SdIo.NUMERIC else SdIo.BOOL,
-            fbIo = when (type) {
-                SdType.FADER -> SdIo.NUMERIC
-                SdType.DISPLAY -> SdIo.STRING
+            sendIo = when { type.numeric -> SdIo.NUMERIC; type == SdType.RADIO -> SdIo.STRING; else -> SdIo.BOOL },
+            fbIo = when {
+                type.numeric -> SdIo.NUMERIC
+                type == SdType.DISPLAY || type == SdType.RADIO -> SdIo.STRING
                 else -> SdIo.BOOL
             },
-            showValue = type == SdType.DISPLAY
+            showValue = type == SdType.DISPLAY || type == SdType.ROTARY,
+            options = if (type == SdType.RADIO) "A=1\nB=2\nC=3" else ""
         )
         update(deskId) { it.copy(elements = it.elements + e, rows = maxOf(it.rows, y + h)) }
         return e

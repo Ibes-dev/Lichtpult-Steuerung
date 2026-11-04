@@ -63,6 +63,20 @@ private val KNOWN_ENUMS: Map<String, List<String>> = mapOf(
  */
 fun ObjectData.fallback(): FallbackValue? {
     if (valueCase != ObjectData.ValueCase.VALUE_NOT_SET) return null
+    // MultiTypeValue (Werte aus der Eingangszuweisung, z. B. On/Off Value, Konstanten): echten Wert lesen.
+    // Die Enum-Heuristik unten würde hier die Schluss-Bytes 0A 0A 0A als Zahl 168430080 deuten.
+    if (DotNetValue.isMulti(this)) {
+        val v = DotNetValue.parseMulti(this)
+        val n = when (v) { is Boolean -> if (v) 1 else 0; is Number -> v.toInt(); else -> null }
+        return FallbackValue("MultiTypeValue", n, DotNetValue.multiText(this))
+    }
+    DotNetValue.parsePoint(this)?.let { (x, y) -> return FallbackValue("Point", null, "$x, $y") }
+    // NumericFannedValue (z. B. Intensity aus dem Programmer-Baustein der Zuweisung): Zahl im
+    // FannedPropertyValue – belegt durch die Bedienfeld-Diagnose vom 01.11.2026
+    if (fallbackCase == ObjectData.FallbackCase.FALLBACKPROTOBUF) fannedNumber(this)?.let { n ->
+        val t = java.math.BigDecimal(n).setScale(4, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
+        return FallbackValue("NumericFannedValue", Math.round(n).toInt(), t)
+    }
     val typeAq = fallbackTypeAQ.ifBlank { protobufTypeAQ }
     val typeName = typeAq.substringBefore(',').substringAfterLast('.').substringAfterLast('+')
     val bytes = when (fallbackCase) {
@@ -148,4 +162,15 @@ class Throttler {
             }
         }
     }
+}
+
+
+/** Erster Zahlenwert eines FannedPropertyValue im Protobuf-Anhang (fannedValues, sonst parameterValues). */
+fun fannedNumber(v: ObjectData): Double? {
+    // nur echte Fächerwerte – andere Protobuf-Anhänge (z. B. Enums) nicht als Fächer deuten
+    if (!(v.fallbackTypeAQ + " " + v.protobufTypeAQ).contains("FannedValue", true)) return null
+    val f = fpvOf(v) ?: return null
+    f.fannedValuesList.firstOrNull { it.valueCase == LumosProtobuf.DeviceServiceTypes.DevicePropertyValue.ValueCase.DOUBLEVALUE }
+        ?.let { return it.doubleValue }
+    return f.parameterValuesList.firstOrNull()?.replace(',', '.')?.toDoubleOrNull()
 }

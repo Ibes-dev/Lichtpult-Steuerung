@@ -72,7 +72,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val midi = MidiHub(app)
     val stage3d = de.sebi.dmxc3remote.net.Stage3DStore(app)
 
-    init { de.sebi.dmxc3remote.net.EffectMemory.init(app) }
+    init {
+        de.sebi.dmxc3remote.net.EffectMemory.init(app)
+        Desk.style = runCatching { DeskStyle.valueOf(prefs.deskStyle) }.getOrDefault(DeskStyle.DUNKEL)
+    }
+
+    fun setDeskStyle(st: DeskStyle) { prefs.deskStyle = st.name; Desk.style = st }
     val mic = MicBeatDetector()
 
     private val _profiles = MutableStateFlow(prefs.profiles)
@@ -87,6 +92,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val micToDmxc = MutableStateFlow(prefs.micToDmxc)
     val cuelistCompact = MutableStateFlow(prefs.cuelistCompact)
     val masterCompact = MutableStateFlow(prefs.masterCompact)
+    /**
+     * Bedienfeld im Vollbild (ohne Leisten, Bildschirm bleibt an). Liegt wie der aktuelle Bereich im
+     * ViewModel: Nach einer Unterbrechung (z. B. Display gesperrt) und dem automatischen Neuverbinden
+     * geht es im Vollbild weiter.
+     */
+    val softdeskFullscreen = MutableStateFlow(prefs.softdeskFullscreen)
+    /** Zuletzt geöffneter Bereich (Name aus Dest). */
+    val currentDest = MutableStateFlow(prefs.lastDest)
+
+    init {
+        // Bereich und Vollbild merken (auch falls Android die App im Hintergrund beendet)
+        viewModelScope.launch { softdeskFullscreen.collect { prefs.softdeskFullscreen = it } }
+        viewModelScope.launch { currentDest.collect { prefs.lastDest = it } }
+    }
+
     val navOrder = MutableStateFlow(prefs.navOrder)
     val goCuelistId = MutableStateFlow(prefs.goCuelistId)
     val volumeKeysGo = MutableStateFlow(prefs.volumeKeysGo)
@@ -194,7 +214,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val s = _session.value ?: return
         val e = findMidiElement(m.key) ?: return
         when (e.type) {
-            SdType.FADER -> s.softdesk.fader(e, m.value / 127.0)
+            SdType.FADER, SdType.ROTARY -> s.softdesk.fader(e, m.value / 127.0)
             SdType.BUTTON -> {
                 if (m.kind == 'C') {
                     s.softdesk.button(e, m.value >= 64)
@@ -347,10 +367,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun disconnect() {
-        sessionJob?.cancel()
+        val s = _session.value
+        val job = sessionJob
         sessionJob = null
         _conn.value = ConnState.Idle
-        startDiscovery()
+        viewModelScope.launch {
+            // erst sauber abmelden (Streams schließen, Logoff), dann die Sitzung abbrechen
+            s?.closeGracefully()
+            job?.cancel()
+            startDiscovery()
+        }
     }
 
     /** Freigabe anfragen: Client erscheint in der DMXC3-Netzwerkverwaltung; zugewiesene NetID wird übernommen. */

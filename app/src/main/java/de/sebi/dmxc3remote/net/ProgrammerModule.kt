@@ -137,6 +137,14 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
     /** Nach eigenen Programmer-Befehlen aufrufen, damit "Inhalt" sofort stimmt. */
     fun touch() = dirty.update { it + 1 }
 
+    /**
+     * Programmer-Änderungen für alle Module. Umbra erlaubt je Sitzung nur EINE Anmeldung pro
+     * Meldungsstrom (zweite Anmeldung: "An item with the same key has already been added" im Umbra-Log).
+     * Deshalb abonniert nur dieses Modul und verteilt die Meldungen weiter.
+     */
+    private val _changes = kotlinx.coroutines.flow.MutableSharedFlow<ProgrammerChangeMessage>(extraBufferCapacity = 64)
+    val changes: kotlinx.coroutines.flow.SharedFlow<ProgrammerChangeMessage> = _changes
+
     /** Programmer-Änderungen (auch vom PC) -> Inhalt neu lesen, gebündelt alle 300 ms. */
     override suspend fun stream() = kotlinx.coroutines.coroutineScope {
         launch {
@@ -152,6 +160,7 @@ class ProgrammerModule(s: UmbraSession) : Module(s, "Programmer") {
             while (true) { delay(3_000); dirty.update { it + 1 } }
         }
         prog.receiveProgrammerChanges(s.getRequest(), s.headers).collect { m ->
+            _changes.tryEmit(m)
             if (m.type == ProgrammerChangeMessage.EChangeType.OutputMode &&
                 (m.userContextId.isBlank() || m.userContextId == s.userContextId)
             ) _blind.value = m.mode == EOutputMode.HIDDEN

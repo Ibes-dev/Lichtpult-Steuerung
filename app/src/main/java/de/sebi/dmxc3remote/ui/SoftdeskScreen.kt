@@ -43,6 +43,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,6 +74,8 @@ import de.sebi.dmxc3remote.net.SdElement
 import de.sebi.dmxc3remote.net.SdIo
 import de.sebi.dmxc3remote.net.SdMode
 import de.sebi.dmxc3remote.net.SdType
+import de.sebi.dmxc3remote.net.numeric
+import de.sebi.dmxc3remote.net.optionList
 import de.sebi.dmxc3remote.net.Softdesk
 import de.sebi.dmxc3remote.net.SoftdeskStore
 import de.sebi.dmxc3remote.net.UmbraSession
@@ -86,10 +90,15 @@ val SD_PALETTE = listOf(
     Color(0xFFB9A6F2), Color(0xFF5B8DEF), Color(0xFFFF8A3D), Color(0xFFE8E6E1)
 )
 
-private fun SdElement.colorValue() = SD_PALETTE[color.mod(SD_PALETTE.size)]
+private fun SdElement.colorValue(): Color =
+    colorHex.removePrefix("#").takeIf { it.length == 6 }?.toLongOrNull(16)?.let { Color(0xFF000000 or it) }
+        ?: SD_PALETTE[color.mod(SD_PALETTE.size)]
 
 @Composable
-fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3remote.midi.MidiHub) {
+fun SoftdeskScreen(
+    s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3remote.midi.MidiHub,
+    fullscreen: Boolean = false, onFullscreen: (() -> Unit)? = null
+) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var importUri by remember { mutableStateOf<android.net.Uri?>(null) }
     val exporter = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -103,7 +112,11 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3rem
     val importer = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri -> importUri = uri }
-    val desks by store.desks.collectAsStateWithLifecycle()
+    val allDesks by store.desks.collectAsStateWithLifecycle()
+    val occasions by store.occasions.collectAsStateWithLifecycle()
+    val activeOcc by store.activeOccasion.collectAsStateWithLifecycle()
+    // nur die im gewählten Anlass sichtbaren Bedienfelder (alle bleiben in DMXControl angemeldet)
+    val desks = remember(allDesks, occasions, activeOcc) { store.visible(allDesks, occasions, activeOcc) }
     val rules by store.rules.collectAsStateWithLifecycle()
     val fb by s.softdesk.feedback.collectAsStateWithLifecycle()
     val registered by s.softdesk.registered.collectAsStateWithLifecycle()
@@ -121,7 +134,10 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3rem
 
     Column(Modifier.fillMaxSize()) {
         ModuleError(err)
-        Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (!fullscreen || desks.size > 1) Row(
+            Modifier.fillMaxWidth().padding(top = 4.dp, end = if (fullscreen) 80.dp else 0.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             LazyRow(
                 Modifier.weight(1f),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -139,7 +155,10 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3rem
                     )
                 }
             }
-            FilterChip(
+            if (!fullscreen && onFullscreen != null && !edit) IconButton(onClick = onFullscreen) {
+                Icon(Icons.Filled.Fullscreen, contentDescription = "Vollbild", tint = Desk.TextDim)
+            }
+            if (!fullscreen) FilterChip(
                 selected = edit,
                 onClick = { edit = !edit },
                 leadingIcon = { Icon(Icons.Filled.Edit, null, Modifier.size(16.dp)) },
@@ -167,7 +186,12 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3rem
             )
         }
 
-        if (desk == null) {
+        if (desk == null && allDesks.isNotEmpty()) {
+            EmptyHint(
+                "Kein Bedienfeld in diesem Anlass",
+                "Unter System → Bedienfeld den Anlass wechseln oder Bedienfelder darin einblenden."
+            )
+        } else if (desk == null) {
             EmptyHint(
                 "Noch kein Bedienfeld",
                 "Auf Bearbeiten tippen, dann Neu. Elemente legst du durch Antippen freier Rasterfelder an. " +
@@ -176,7 +200,7 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3rem
         } else {
             DeskCanvas(
                 desk = desk,
-                edit = edit,
+                edit = edit && !fullscreen,
                 feedback = fb,
                 rules = rules,
                 s = s,
@@ -192,6 +216,7 @@ fun SoftdeskScreen(s: UmbraSession, store: SoftdeskStore, midi: de.sebi.dmxc3rem
         ElementEditor(
             e = ed,
             desk = desk,
+            sess = s,
             rules = rules,
             midi = midi,
             onDismiss = { editingId = null },
@@ -367,7 +392,21 @@ private fun ElementFrame(
 
 // ================================================================== Elemente im Betrieb
 @Composable
-private fun ElementContent(e: SdElement, fb: ObjectData?, rules: FeedbackRules, s: UmbraSession, enabled: Boolean) {
+private fun ElementContent(e0: SdElement, fb: ObjectData?, rules: FeedbackRules, s: UmbraSession, enabled: Boolean) {
+    // Anpassungen: Beschriftung ausblenden, Schriftgröße
+    val e = if (e0.hideLabel) e0.copy(name = "") else e0
+    val dens = LocalDensity.current
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalDensity provides androidx.compose.ui.unit.Density(dens.density, dens.fontScale * e0.textScale.coerceIn(0.6f, 2.5f))
+    ) {
+        Box(Modifier.fillMaxSize().then(if (e0.outline) Modifier.border(2.dp, e0.colorValue(), RoundedCornerShape(10.dp)) else Modifier)) {
+            ElementBody(e, fb, rules, s, enabled)
+        }
+    }
+}
+
+@Composable
+private fun ElementBody(e: SdElement, fb: ObjectData?, rules: FeedbackRules, s: UmbraSession, enabled: Boolean) {
     val color = e.colorValue()
     val on = fb?.isOn(rules, e.fbOn) == true
     val shape = RoundedCornerShape(10.dp)
@@ -400,6 +439,13 @@ private fun ElementContent(e: SdElement, fb: ObjectData?, rules: FeedbackRules, 
         SdType.TEXT -> Box(Modifier.fillMaxSize().padding(6.dp), contentAlignment = Alignment.CenterStart) {
             Text(e.name, style = MaterialTheme.typography.titleMedium, color = color, maxLines = 3, overflow = TextOverflow.Ellipsis)
         }
+        SdType.ROTARY -> SdRotary(e, fb, color, s, enabled)
+        SdType.XY -> SdXY(e, color, s, enabled)
+        SdType.RADIO -> SdRadio(e, fb, color, s, enabled)
+        SdType.CUELIST_MONITOR -> SdCuelistMonitor(e, color, s, enabled)
+        SdType.CUELIST_SELECTOR -> SdCuelistSelector(e, color, s, enabled)
+        SdType.DEVICE_SELECTOR -> SdDeviceSelector(e, color, s, enabled)
+        SdType.CLOCK -> SdClock(e, color, s)
     }
 }
 
@@ -492,13 +538,20 @@ private fun TypePicker(onDismiss: () -> Unit, onPick: (SdType) -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text("Element hinzufügen") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf(
                     SdType.BUTTON to "Sendet beim Drücken, leuchtet bei Rückmeldung",
                     SdType.FADER to "Wert stufenlos, folgt der Rückmeldung",
                     SdType.LED to "Zeigt einen Zustand an",
                     SdType.DISPLAY to "Zeigt einen Wert oder Text aus DMXControl",
-                    SdType.TEXT to "Feste Beschriftung, ohne Verbindung"
+                    SdType.TEXT to "Feste Beschriftung, ohne Verbindung",
+                    SdType.ROTARY to "Drehregler (kreisförmig ziehen), Wert wie ein Fader",
+                    SdType.XY to "Zweidimensionales Feld, sendet X und Y als zwei Eingänge",
+                    SdType.RADIO to "Mehrere Optionen, eine ist aktiv (z. B. Szene A/B/C)",
+                    SdType.CUELIST_MONITOR to "Zeigt eine Cuelist: Zustand, aktueller und nächster Cue, Go/Stop",
+                    SdType.CUELIST_SELECTOR to "Liste aller Cuelists: antippen = Go, lange drücken = Stop",
+                    SdType.DEVICE_SELECTOR to "Gerätegruppen oder Geräte für den Programmer auswählen",
+                    SdType.CLOCK to "Uhrzeit, optional mit Datum"
                 ).forEach { (t, hint) ->
                     Column(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Desk.Raised)
@@ -542,6 +595,7 @@ private fun EditorHeading(text: String) {
 private fun ElementEditor(
     e: SdElement,
     desk: Softdesk,
+    sess: UmbraSession,
     rules: FeedbackRules,
     midi: de.sebi.dmxc3remote.midi.MidiHub,
     onDismiss: () -> Unit,
@@ -578,6 +632,44 @@ private fun ElementEditor(
                     }
                 }
 
+                EditorHeading("Darstellung")
+                OutlinedTextField(
+                    d.colorHex, { d = d.copy(colorHex = it.trim().take(7)) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Eigene Farbe (#RRGGBB, leer = Palette)") },
+                    trailingIcon = { Box(Modifier.size(20.dp).clip(CircleShape).background(d.colorValue())) }
+                )
+                Text("Schriftgröße", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim)
+                ChoiceRow(listOf(0.8f, 1f, 1.3f, 1.7f, 2.2f), d.textScale, { when (it) { 0.8f -> "S"; 1f -> "M"; 1.3f -> "L"; 1.7f -> "XL"; else -> "XXL" } }) { d = d.copy(textScale = it) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Beschriftung ausblenden", modifier = Modifier.weight(1f)); Switch(checked = d.hideLabel, onCheckedChange = { d = d.copy(hideLabel = it) })
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Farbiger Rahmen", modifier = Modifier.weight(1f)); Switch(checked = d.outline, onCheckedChange = { d = d.copy(outline = it) })
+                }
+
+                if (d.type == SdType.RADIO) {
+                    EditorHeading("Optionen")
+                    OutlinedTextField(
+                        d.options, { d = d.copy(options = it) }, modifier = Modifier.fillMaxWidth(), minLines = 3,
+                        label = { Text("Eine Option je Zeile: Beschriftung=Wert") }
+                    )
+                    Text("Werttyp", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim)
+                    ChoiceRow(SdIo.entries, d.sendIo, { it.label }) { d = d.copy(sendIo = it, fbIo = it) }
+                }
+                if (d.type == SdType.CUELIST_MONITOR) {
+                    EditorHeading("Cuelist")
+                    CuelistPick(sess, d.target) { d = d.copy(target = it) }
+                }
+                if (d.type == SdType.DEVICE_SELECTOR) {
+                    EditorHeading("Auswahl")
+                    ChoiceRow(listOf("", "devices"), d.target, { if (it == "devices") "Einzelgeräte" else "Gerätegruppen" }) { d = d.copy(target = it) }
+                }
+                if (d.type == SdType.CLOCK) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Datum anzeigen", modifier = Modifier.weight(1f)); Switch(checked = d.showValue, onCheckedChange = { d = d.copy(showValue = it) })
+                    }
+                }
+
                 EditorHeading("Position und Größe")
                 Stepper("Spalte", d.x + 1, 1, desk.cols - d.w + 1) { d = d.copy(x = it - 1) }
                 Stepper("Zeile", d.y + 1, 1, 99) { d = d.copy(y = it - 1) }
@@ -600,7 +692,7 @@ private fun ElementEditor(
                         }
                     }
                 }
-                if (d.type == SdType.FADER) {
+                if (d.type.numeric) {
                     EditorHeading("Wertebereich")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
@@ -616,7 +708,7 @@ private fun ElementEditor(
                 }
                 if (d.type.hasSink) {
                     EditorHeading("Rückmeldung von DMXControl")
-                    if (d.type != SdType.FADER) {
+                    if (!d.type.numeric && d.type != SdType.RADIO) {
                         Text("Werttyp des Ausgangs", style = MaterialTheme.typography.labelMedium, color = Desk.TextDim)
                         ChoiceRow(SdIo.entries, d.fbIo, { it.label }) { d = d.copy(fbIo = it) }
                         OutlinedTextField(
@@ -633,7 +725,7 @@ private fun ElementEditor(
                         Switch(checked = d.showValue, onCheckedChange = { d = d.copy(showValue = it) })
                     }
                 }
-                if (d.type == SdType.BUTTON || d.type == SdType.FADER || d.type == SdType.LED) {
+                if (d.type == SdType.BUTTON || d.type == SdType.FADER || d.type == SdType.LED || d.type == SdType.ROTARY) {
                     EditorHeading("MIDI-Controller")
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -645,7 +737,7 @@ private fun ElementEditor(
                             Text(if (learning == e.id) "Warte auf MIDI …" else "MIDI lernen")
                         }
                     }
-                    if (d.midi.startsWith("N:") && d.type != SdType.FADER) {
+                    if (d.midi.startsWith("N:") && !d.type.numeric) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
                                 d.midiOn.toString(), { v -> v.toIntOrNull()?.let { d = d.copy(midiOn = it.coerceIn(0, 127)) } },
@@ -821,4 +913,233 @@ private fun midiLabel(key: String): String {
     if (p.size != 3) return key
     val kind = if (p[0] == "N") "Note" else "Regler (CC)"
     return "$kind ${p[2]}, Kanal ${(p[1].toIntOrNull() ?: 0) + 1}"
+}
+
+// ================================================================== Neue Elemente
+/** Drehregler: senkrecht oder waagerecht ziehen (relativ, wie der Fader), Bogen zeigt den Wert. */
+@Composable
+private fun SdRotary(e: SdElement, fb: ObjectData?, color: Color, s: UmbraSession, enabled: Boolean) {
+    var local by remember(e.id) { mutableStateOf(0f) }
+    var dragging by remember(e.id) { mutableStateOf(false) }
+    val span = (e.max - e.min).takeIf { it != 0.0 } ?: 1.0
+    val fbPos = fb?.asDouble()?.let { ((it - e.min) / span).toFloat().coerceIn(0f, 1f) }
+    val pos = if (dragging) local else fbPos ?: local
+    val cur by rememberUpdatedState(pos)
+    val shape = RoundedCornerShape(10.dp)
+    Column(
+        Modifier.fillMaxSize().clip(shape).background(Desk.Panel).border(1.dp, Desk.Line, shape).padding(6.dp)
+            .then(if (!enabled) Modifier else Modifier.pointerInput(e.id) {
+                detectDragGestures(
+                    onDragStart = { local = cur; dragging = true },
+                    onDragEnd = { dragging = false }, onDragCancel = { dragging = false }
+                ) { change, d ->
+                    change.consume()
+                    // nach oben/rechts = mehr; 200 dp Weg = voller Bereich
+                    local = (local + (d.x - d.y) / (200.dp.toPx())).coerceIn(0f, 1f)
+                    s.softdesk.fader(e, local.toDouble())
+                }
+            }),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (e.name.isNotBlank()) Text(e.name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                val d = minOf(size.width, size.height) * 0.86f
+                val tl = Offset((size.width - d) / 2, (size.height - d) / 2)
+                val st = androidx.compose.ui.graphics.drawscope.Stroke(d * 0.09f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                drawArc(Desk.Raised, 135f, 270f, false, tl, androidx.compose.ui.geometry.Size(d, d), style = st)
+                drawArc(color, 135f, 270f * pos, false, tl, androidx.compose.ui.geometry.Size(d, d), style = st)
+                val a = Math.toRadians((135.0 + 270.0 * pos))
+                val c = Offset(size.width / 2, size.height / 2)
+                drawLine(Desk.Text, c, c + Offset((kotlin.math.cos(a) * d * 0.32).toFloat(), (kotlin.math.sin(a) * d * 0.32).toFloat()), d * 0.05f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+            }
+            if (e.showValue) Text(
+                if (e.min == 0.0 && e.max == 1.0) "${(pos * 100).roundToInt()}" else "%.1f".format(e.min + pos * span),
+                style = MaterialTheme.typography.labelSmall.merge(Numeric), color = Desk.TextDim, modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+    }
+}
+
+/** XY-Feld: sendet X und Y als zwei Eingänge ("<Name> X", "<Name> Y"). */
+@Composable
+private fun SdXY(e: SdElement, color: Color, s: UmbraSession, enabled: Boolean) {
+    var x by remember(e.id) { mutableStateOf(0.5f) }
+    var y by remember(e.id) { mutableStateOf(0.5f) }
+    Column(Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).background(Desk.Panel).padding(6.dp)) {
+        if (e.name.isNotBlank()) Text(e.name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        XYPad(x, y, { nx, ny ->
+            if (enabled) { x = nx; y = ny; s.softdesk.xy(e, nx.toDouble(), (1f - ny).toDouble()) }
+        }, color, Modifier.fillMaxWidth().weight(1f))
+    }
+}
+
+/** Auswahl: eine von mehreren Optionen, aktive Option aus der Rückmeldung (oder zuletzt gewählt). */
+@Composable
+private fun SdRadio(e: SdElement, fb: ObjectData?, color: Color, s: UmbraSession, enabled: Boolean) {
+    val opts = remember(e.options) { e.optionList() }
+    var last by remember(e.id) { mutableStateOf<String?>(null) }
+    val active = fb?.text()?.takeIf { it.isNotBlank() } ?: last
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val vertical = maxHeight > maxWidth * 1.2f
+        @Composable
+        fun cell(label: String, value: String, mod: Modifier) {
+            val on = active != null && (active == value || active.toDoubleOrNull()?.let { a -> value.replace(',', '.').toDoubleOrNull() == a } == true)
+            Box(
+                mod.fillMaxSize().clip(RoundedCornerShape(8.dp)).background(if (on) color else Desk.Raised)
+                    .then(if (enabled) Modifier.pointerInput(value) { detectTapGestures { last = value; s.softdesk.radio(e, value) } } else Modifier),
+                contentAlignment = Alignment.Center
+            ) { Text(label, color = if (on) Color.Black else Desk.Text, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        }
+        Column(Modifier.fillMaxSize()) {
+            if (e.name.isNotBlank()) Text(e.name, style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
+            if (vertical) Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) { opts.forEach { (l, v) -> cell(l, v, Modifier.weight(1f)) } }
+            else Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) { opts.forEach { (l, v) -> cell(l, v, Modifier.weight(1f)) } }
+        }
+    }
+}
+
+/** Cuelist-Monitor: Zustand, aktueller/nächster Cue, Fortschritt, Go/Stop/Zurück. */
+@Composable
+private fun SdCuelistMonitor(e: SdElement, color: Color, s: UmbraSession, enabled: Boolean) {
+    val lists by s.cuelists.items.collectAsStateWithLifecycle()
+    val progress by s.cuelists.progress.collectAsStateWithLifecycle()
+    val cl = lists[e.target]
+    val shape = RoundedCornerShape(10.dp)
+    Column(Modifier.fillMaxSize().clip(shape).background(Desk.Panel).border(1.dp, Desk.Line, shape).padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        if (cl == null) { Text(if (e.target.isBlank()) "Cuelist im Bearbeiten-Modus wählen" else "Cuelist nicht gefunden", color = Desk.TextDim, style = MaterialTheme.typography.bodySmall); return@Column }
+        val cues = s.cuelists.cuesOf(cl.id)
+        val cur = cues.firstOrNull { it.cueIndex == cl.index }
+        val next = cues.firstOrNull { it.cueIndex == cl.nextIndex }
+        val p = progress[cl.id]?.cueProgressStateMap?.get(cl.index)?.progress
+        val stateColor = when (cl.state) {
+            LumosProtobuf.Cuelist.CuelistServiceTypes.ESceneListState.RUNNING -> Desk.Green
+            LumosProtobuf.Cuelist.CuelistServiceTypes.ESceneListState.PAUSED -> Desk.Amber
+            else -> Desk.Line
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(10.dp).clip(CircleShape).background(stateColor))
+            Text((e.name.ifBlank { cl.name }), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 6.dp).weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Text("▶ " + (cur?.name?.ifBlank { null } ?: if (cur != null) "Cue ${cl.index + 1}" else "–"), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("Nächster: " + (next?.name?.ifBlank { null } ?: if (next != null) "Cue ${cl.nextIndex + 1}" else "–"), style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        androidx.compose.material3.LinearProgressIndicator(progress = { ((p ?: 0.0).toFloat()).coerceIn(0f, 1f) }, color = color, trackColor = Desk.Raised, modifier = Modifier.fillMaxWidth().height(4.dp))
+        Row(Modifier.weight(1f, fill = false), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf("◀" to LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistActionRequest.EAction.GO_BACK,
+                "GO" to LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistActionRequest.EAction.GO,
+                "■" to LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistActionRequest.EAction.STOP).forEach { (l, a) ->
+                Box(
+                    Modifier.weight(if (l == "GO") 2f else 1f).height(34.dp).clip(RoundedCornerShape(8.dp))
+                        .background(if (l == "GO") color else Desk.Raised)
+                        .then(if (enabled) Modifier.pointerInput(a) { detectTapGestures { s.cuelists.action(cl.id, a) } } else Modifier),
+                    contentAlignment = Alignment.Center
+                ) { Text(l, color = if (l == "GO") Color.Black else Desk.Text, style = MaterialTheme.typography.labelLarge) }
+            }
+        }
+    }
+}
+
+/** Cuelist-Auswahl: alle Cuelists, antippen = Go, lange drücken = Stop. */
+@Composable
+private fun SdCuelistSelector(e: SdElement, color: Color, s: UmbraSession, enabled: Boolean) {
+    val lists by s.cuelists.items.collectAsStateWithLifecycle()
+    val sorted = remember(lists) { lists.values.sortedBy { it.number } }
+    val shape = RoundedCornerShape(10.dp)
+    Column(Modifier.fillMaxSize().clip(shape).background(Desk.Panel).border(1.dp, Desk.Line, shape).padding(4.dp)) {
+        if (e.name.isNotBlank()) Text(e.name, style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, modifier = Modifier.padding(4.dp))
+        androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            items(sorted, key = { it.id }) { cl ->
+                val running = cl.state == LumosProtobuf.Cuelist.CuelistServiceTypes.ESceneListState.RUNNING
+                Row(
+                    Modifier.fillMaxWidth().height(36.dp).clip(RoundedCornerShape(6.dp))
+                        .background(if (running) color.copy(alpha = 0.3f) else Desk.Raised)
+                        .then(if (enabled) Modifier.pointerInput(cl.id) {
+                            detectTapGestures(
+                                onTap = { s.cuelists.action(cl.id, LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistActionRequest.EAction.GO) },
+                                onLongPress = { s.cuelists.action(cl.id, LumosProtobuf.Cuelist.CuelistServiceTypes.CuelistActionRequest.EAction.STOP) }
+                            )
+                        } else Modifier)
+                        .padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("${cl.number}", style = MaterialTheme.typography.labelMedium.merge(Numeric), color = Desk.TextDim, modifier = Modifier.width(28.dp))
+                    Text(cl.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    if (running) Box(Modifier.size(8.dp).clip(CircleShape).background(Desk.Green))
+                }
+            }
+        }
+    }
+}
+
+/** Geräte-Auswahl: Gerätegruppen (oder Einzelgeräte) für den Programmer wählen. */
+@Composable
+private fun SdDeviceSelector(e: SdElement, color: Color, s: UmbraSession, enabled: Boolean) {
+    val groups by s.devices.groups.collectAsStateWithLifecycle()
+    val devices by s.stage.devices.collectAsStateWithLifecycle()
+    val ctx by s.userContext.collectAsStateWithLifecycle()
+    val single = e.target == "devices"
+    val entries = remember(groups, devices, single) {
+        if (single) devices.values.sortedBy { it.number }.map { Triple(it.id, "${it.number}", it.name) }
+        else groups.values.sortedBy { it.number }.map { Triple(it.id, "${it.number}", it.name) }
+    }
+    var picked by remember(e.id) { mutableStateOf(setOf<String>()) }
+    val selected = if (single) picked else (ctx?.selectedDeviceGroupsList?.toSet().orEmpty() + listOfNotNull(ctx?.selectedDeviceGroup?.ifBlank { null }))
+    val shape = RoundedCornerShape(10.dp)
+    Column(Modifier.fillMaxSize().clip(shape).background(Desk.Panel).border(1.dp, Desk.Line, shape).padding(4.dp)) {
+        if (e.name.isNotBlank()) Text(e.name, style = MaterialTheme.typography.labelSmall, color = Desk.TextDim, modifier = Modifier.padding(4.dp))
+        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+            androidx.compose.foundation.lazy.grid.GridCells.Adaptive(88.dp), Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            items(entries.size) { i ->
+                val (id, nr, name) = entries[i]
+                val on = id in selected
+                Column(
+                    Modifier.height(44.dp).clip(RoundedCornerShape(6.dp)).background(if (on) color else Desk.Raised)
+                        .then(if (enabled) Modifier.pointerInput(id, on) {
+                            detectTapGestures {
+                                if (single) {
+                                    picked = if (on) picked - id else picked + id
+                                    s.devices.selectIds(picked.toList())
+                                } else s.devices.select(listOf(id))
+                            }
+                        } else Modifier)
+                        .padding(horizontal = 6.dp),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(name, style = MaterialTheme.typography.labelMedium, color = if (on) Color.Black else Desk.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(nr, style = MaterialTheme.typography.labelSmall, color = if (on) Color.Black.copy(alpha = 0.7f) else Desk.TextDim)
+                }
+            }
+        }
+    }
+}
+
+/** Uhr (optional mit Datum). */
+@Composable
+private fun SdClock(e: SdElement, color: Color, s: UmbraSession) {
+    var now by remember { mutableStateOf(java.time.LocalDateTime.now()) }
+    androidx.compose.runtime.LaunchedEffect(Unit) { while (true) { now = java.time.LocalDateTime.now(); kotlinx.coroutines.delay(1000) } }
+    Column(Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).background(Desk.Panel).padding(6.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        if (e.name.isNotBlank()) Text(e.name, style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
+        Text(now.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")), style = MaterialTheme.typography.headlineSmall.merge(Numeric), color = color)
+        if (e.showValue) Text(now.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")), style = MaterialTheme.typography.labelSmall, color = Desk.TextDim)
+    }
+}
+
+/** Cuelist für den Monitor wählen (im Editor). */
+@Composable
+private fun CuelistPick(s: UmbraSession, selected: String, onPick: (String) -> Unit) {
+    val lists by s.cuelists.items.collectAsStateWithLifecycle()
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        lists.values.sortedBy { it.number }.forEach { cl ->
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(if (cl.id == selected) Desk.Amber.copy(alpha = 0.3f) else Desk.Raised)
+                    .pointerInput(cl.id) { detectTapGestures { onPick(cl.id) } }.padding(8.dp)
+            ) {
+                Text("${cl.number}", modifier = Modifier.width(32.dp), style = MaterialTheme.typography.labelMedium)
+                Text(cl.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
 }
