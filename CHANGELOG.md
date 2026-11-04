@@ -2,22 +2,20 @@
 
 ## Neu
 - **Designs:** Dunkel, Schwarz (OLED), Klassisch (Pult), Modern und Hell – unter System → Projekt → Design.
-- **Bedienfeld im Vollbild:** ohne Leisten, Bildschirm bleibt an, Verbindungspunkt und Beenden oben rechts. Nach einer Unterbrechung (z. B. Display gesperrt) und dem automatischen Neuverbinden geht es im Vollbild weiter; die App merkt sich generell den zuletzt geöffneten Bereich.
+- **Bedienfeld im Vollbild:** ohne Leisten, Bildschirm bleibt an, Verbindungspunkt und Beenden oben rechts. Nach einer Unterbrechung (z. B. Display gesperrt) geht es nach dem automatischen Neuverbinden im Vollbild weiter.
 - **Neue Bedienfeld-Elemente:** Drehregler, XY-Feld (X und Y als zwei Eingänge), Auswahl (Optionen wie Szene A/B/C), Cuelist-Monitor (Zustand, aktueller/nächster Cue, Go/Zurück/Stop), Cuelist-Auswahl (antippen = Go, lange drücken = Stop), Geräte-Auswahl (Gruppen oder Einzelgeräte für den Programmer), Uhr.
-- **Anlässe** unter System → Bedienfeld: festlegen, welche Bedienfelder z. B. bei „Konzert“ oder „Fasnet“ sichtbar sind; ausgeblendete bleiben in DMXControl angemeldet. Anlässe werden mit exportiert.
 - **Mehr Gestaltung je Element:** eigene Farbe (#RRGGBB), Schriftgröße S–XXL, Beschriftung ausblenden, farbiger Rahmen. Das Raster bleibt.
+- **Anlässe** unter System → Bedienfeld: festlegen, welche Bedienfelder z. B. bei „Konzert“ oder „Fasnet“ sichtbar sind; ausgeblendete bleiben in DMXControl angemeldet. Anlässe werden mit exportiert.
+- **System → Hardware:** DMX-Interfaces zeigen Kommentar, Instanznummer und weitere Angaben (z. B. IP) – gleiche Interfaces sind so unterscheidbar. Den Kommentar kannst du in der App ändern.
 - **3D-Bühne:** Gobos je Gobo-Nummer unterschiedlich dargestellt, mit Gobo-Rotation und -Indexierung.
 
+## Geändert
+- Die App öffnet beim Start den zuletzt genutzten Bereich.
+
 ## Behoben
+- Bedienfeld: Werte aus der Zuweisung wurden falsch oder gar nicht gelesen (z. B. von Konstante, Binary Switcher oder Intensity des Programmer-Bausteins); Fader und Anzeigen folgen jetzt auch ohne Rule of Three.
 - 3D-Bühne: Gobos von Moving Heads wurden nicht erkannt, wenn das Gerät auch Goborotation/Goboindex hat, oder bei mehreren Gobo-Rädern.
-- Programmer-Änderungen wurden doppelt abonniert (Fehlermeldung im Umbra-Log).
-- Bedienfeld: Werte aus der Zuweisung wurden falsch oder gar nicht gelesen (MultiTypeValue, z. B. von Konstante oder Binary Switcher, und NumericFannedValue, z. B. Intensity des Programmer-Bausteins); Fader und Anzeigen folgen jetzt auch ohne Rule of Three.
-
-# Lichtpult Remote 1.3.1
-
-## Neu
-- **System → Hardware:** DMX-Interfaces zeigen den Kommentar aus DMXControl, die Instanznummer und weitere Angaben (z. B. IP) – gleiche Interfaces sind so unterscheidbar.
-- Kommentar direkt in der App ändern (Antippen des Interfaces), wird in DMXControl gespeichert.
+- Fehlermeldung „ProgrammerChanges … has faulted“ im Umbra-Log beim Verbinden.
 
 # Lichtpult Remote 1.3.0
 
