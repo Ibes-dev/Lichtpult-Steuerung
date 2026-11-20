@@ -84,8 +84,10 @@ private fun rad(d: Float) = d * PI.toFloat() / 180f
 private class Camera(target: V3, yaw: Float, pitch: Float, dist: Float, val w: Float, val h: Float) {
     private val eye = target + V3(sin(rad(yaw)) * cos(rad(pitch)), cos(rad(yaw)) * cos(rad(pitch)), sin(rad(pitch))) * dist
     private val fwd = (target - eye).norm()
-    private val right = (fwd cross V3(0f, 0f, 1f)).norm()
-    private val up = right cross fwd
+    // Welt: x = rechts (Blick vom Publikum), y = Richtung Publikum, z = oben – wie die StageView
+    // (Bildschirm-y nach unten) gespiegelt; deshalb right = oben × Blickrichtung, sonst wäre links/rechts vertauscht
+    private val right = (V3(0f, 0f, 1f) cross fwd).norm()
+    private val up = fwd cross right
     private val f = h * 0.9f
 
     /** Bildschirmpunkt oder null, wenn hinter der Kamera. */

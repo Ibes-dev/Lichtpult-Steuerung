@@ -1,3 +1,8 @@
+# Lichtpult Remote 1.4.1
+
+## Behoben
+- 3D-Bühne: Links und rechts waren vertauscht (Bild gespiegelt). Die Bühne erscheint jetzt wie vom Publikum aus gesehen, passend zur StageView.
+
 # Lichtpult Remote 1.4.0
 
 ## Neu
